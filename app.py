@@ -344,12 +344,7 @@ def create_styled_excel(sheets_dict, add_dropdowns_on_sheet=None):
 
 # --- Main UI Header ---
 st.title("⚡ Smart Feedback Analyzer & Fast Link-Review Workspace")
-st.markdown(
-    "Because the raw system export (`明细表_Schedules_en.xlsx`) sets `The responsible person replies with the handling result.` to `SNULL`, this tool cuts **75%+ of your manual link-checking time** using **3 Smart Accelerators**:  \n"
-    "1. **Smart Auto-Detection Engine:** Automatically marks cases with `Corrected Knowledge` / `Optimized knowledge` as **Reasonable**, marks `The issue remains unresolved.` or rejected escalations as **Unreasonable**, and marks incomplete loops without replies as **SNULL (Pending)** — leaving only a few ambiguous cases to verify!  \n"
-    "2. **Historical Memory Import (Optional):** Upload a previous week's analyzed Excel file so any previously reviewed `Order No.` is automatically remembered.  \n"
-    "3. **In-App Clickable Link Workspace OR Excel Two-Stage Export:** Click the `Electronic Flow Link` directly inside the table below while reading the Handler's Reply & Problem Description side-by-side, or export `Pending_Cases_Review.xlsx` for offline manual updates."
-)
+
 
 col_u1, col_u2, col_u3 = st.columns(3)
 with col_u1:
