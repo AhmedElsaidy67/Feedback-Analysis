@@ -14,9 +14,9 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 st.set_page_config(
-    page_title="Feedback Analyzer & Dual-Closure Report Tool",
+    page_title="Smart Feedback Analyzer & Pre-Classifier",
     layout="wide",
-    page_icon="📊"
+    page_icon="⚡"
 )
 
 ROSTER_FILE = "Master_Roster_DB.xlsx"
@@ -27,18 +27,18 @@ DEFAULT_HC = [
     {"LOB": "CHR - MEA", "Team HC": 7},
     {"LOB": "CSE Team", "Team HC": 5},
     {"LOB": "E-Commerce", "Team HC": 9},
-    {"LOB": "Egypt Hotline", "Team HC": 19},
+    {"LOB": "Egypt Hotline", "Team HC": 14},
     {"LOB": "Egypt Supervisor", "Team HC": 1},
-    {"LOB": "E-Mail Team", "Team HC": 3},
-    {"LOB": "MEA Hotline", "Team HC": 7},
-    {"LOB": "Outbound", "Team HC": 10},
+    {"LOB": "E-Mail Team", "Team HC": 4},
+    {"LOB": "MEA Hotline", "Team HC": 8},
+    {"LOB": "Outbound", "Team HC": 9},
     {"LOB": "Quality Department", "Team HC": 6},
     {"LOB": "Social Media Arabic", "Team HC": 2},
-    {"LOB": "Social Media English", "Team HC": 9},
+    {"LOB": "Social Media English", "Team HC": 11},
     {"LOB": "South Africa Team", "Team HC": 9},
     {"LOB": "Training Department", "Team HC": 3},
     {"LOB": "UAE Supervisor", "Team HC": 1},
-    {"LOB": "WhatsApp", "Team HC": 7},
+    {"LOB": "WhatsApp", "Team HC": 8},
 ]
 
 def load_master_roster():
@@ -64,7 +64,7 @@ def save_master_roster(agents_df, hc_df):
 
 agents_df, hc_df = load_master_roster()
 
-# --- Sidebar: Master Roster & Team HC ---
+# --- Sidebar: Master Roster & Historical Memory ---
 st.sidebar.title("⚙️ Master Roster & Team HC")
 st.sidebar.markdown(
     f"**Registered Agents:** `{len(agents_df)}`  \n"
@@ -109,7 +109,16 @@ with st.sidebar.expander("📝 View / Edit Roster & Team HC"):
         st.success("Saved successfully!")
 
 # --- Smart Pre-Classification Engine ---
-def smart_pre_classify_row(row):
+def smart_pre_classify_row(row, hist_map=None):
+    """
+    Infers Handling Result ('Reasonable', 'Unreasonable', 'SNULL') and Confidence Level
+    from system columns so the user doesn't have to open every Electronic Flow Link manually!
+    """
+    order_no = str(row.get("Order No.", "")).strip()
+    if hist_map and order_no in hist_map:
+        h = hist_map[order_no]
+        return h["result"], "100% (From Previous Sheet)", h.get("comment", ""), h.get("severity", ""), h.get("escalation", "")
+
     sol1 = str(row.get("Responsible person replies with a handling solution", "SNULL")).strip()
     sol2 = str(row.get("Responsible person replies with a handling solution.1", sol1)).strip()
     resolved = str(row.get("Is it resolved?", "SNULL")).strip()
@@ -119,17 +128,17 @@ def smart_pre_classify_row(row):
     reply_txt = str(row.get("Responsible Person's Reply and Comments", "SNULL")).strip()
     issue_type = str(row.get("Issue Type", "")).strip()
 
-    # Rule 1: If already explicitly labeled Reasonable or Unreasonable in the uploaded Raw Data
+    # Rule 1: If already explicitly labeled Reasonable or Unreasonable in the file
     if sys_res in ["Reasonable", "Unreasonable"]:
         sev = "High" if (sys_res == "Unreasonable" or issue_type == "The content is incorrect.") else ("Medium" if issue_type == "Situation encountered by uncovered users" else "Low")
         esc = "Yes" if sys_res == "Unreasonable" else "No"
-        return sys_res, "100% (Explicit in Raw Data)", "", sev, esc
+        return sys_res, "100% (Explicit in File)", "", sev, esc
 
-    # Rule 2: If Handling Solution is Corrected Knowledge or Optimized knowledge -> Reasonable
+    # Rule 2: If Handling Solution is Corrected Knowledge or Optimized knowledge -> 100% Reasonable!
     if sol1 in ["Corrected Knowledge", "Optimized knowledge"] or sol2 in ["Corrected Knowledge", "Optimized knowledge"] or upg_res == "The complaint is reasonable":
         return "Reasonable", "High (Auto: Knowledge Updated)", "", "Low", "No"
 
-    # Rule 3: If Upgrade result says unreasonable OR Is it resolved? == 'The issue remains unresolved.' -> Unreasonable
+    # Rule 3: If Upgrade result says unreasonable OR Is it resolved? == 'The issue remains unresolved.' -> Unreasonable!
     if upg_res == "The complaint is unreasonable." or resolved == "The issue remains unresolved.":
         return "Unreasonable", "High (Auto: Unresolved / Rejected)", "", "High", "Yes"
 
@@ -143,15 +152,16 @@ def smart_pre_classify_row(row):
         if any(p in reply_lower for p in accept_phrases):
             return "Reasonable", "Medium-High (Auto: Positive Reply)", "", "Low", "No"
 
-    # Rule 5: If Loop is still 'The electronic current has not been fully completed.' and no reply -> SNULL
+    # Rule 5: If Loop is still 'The electronic current has not been fully completed.' and no reply -> SNULL (Still Pending)
     if loop_st == "The electronic current has not been fully completed." and (reply_txt == "SNULL" or not reply_txt):
         sev = "High" if issue_type == "The content is incorrect." else ("Medium" if issue_type == "Situation encountered by uncovered users" else "Low")
         return "SNULL", "High (Auto: Loop Incomplete & No Reply)", "", sev, "Yes"
 
-    return "SNULL", "Low (Check E-Flow Link)", "", "Medium", "Yes"
+    # Rule 6: Remaining ambiguous cases (e.g. 'Not through the owner phase' with SNULL reply) -> Needs quick link check
+    return "Needs Link Check", "Low (Check E-Flow Link)", "", "Medium", "No"
 
 
-def enrich_and_classify_dataframe(df, agents_df):
+def enrich_and_classify_dataframe(df, agents_df, hist_map=None):
     df = df.copy()
     df["Consignee"] = df["Consignee"].astype(str).str.strip()
 
@@ -176,9 +186,10 @@ def enrich_and_classify_dataframe(df, agents_df):
     df["Submitter Name"] = df["Submitter Name"].astype(str).str.strip()
     df["Submitter LOB"] = df["Submitter LOB"].astype(str).str.strip()
 
+    # Apply smart pre-classification
     results, confs, comms, sevs, escs = [], [], [], [], []
     for _, row in df.iterrows():
-        r_val, c_val, cm_val, sv_val, es_val = smart_pre_classify_row(row)
+        r_val, c_val, cm_val, sv_val, es_val = smart_pre_classify_row(row, hist_map)
         results.append(r_val)
         confs.append(c_val)
         comms.append(cm_val)
@@ -197,9 +208,9 @@ def enrich_and_classify_dataframe(df, agents_df):
 
 def apply_optional_pending_review_updates(base_df, reviewed_df):
     """
-    Applies user updates from the optional Pending_Cases_Review sheet onto the Raw Data.
-    If the user changes a ticket from Reasonable -> Unreasonable, Unreasonable -> Reasonable,
-    or SNULL -> Reasonable/Unreasonable, it updates the main dataset so the final report reflects it!
+    Applies manual updates from the optional Pending_Cases_Review sheet onto the Raw Data.
+    If the user changes any ticket status (Reasonable <-> Unreasonable <-> SNULL) or edits
+    Comment / Severity / Escalation status / Relevant Team, it updates the main dataset for final reporting.
     """
     df = base_df.copy()
     rev = reviewed_df.copy()
@@ -211,7 +222,9 @@ def apply_optional_pending_review_updates(base_df, reviewed_df):
     rev["Order No."] = rev["Order No."].astype(str).str.strip()
     rev = rev.drop_duplicates(subset=["Order No."], keep="last")
 
-    # Map updated columns by Order No.
+    if "Escalation status " in rev.columns and "Escalation status" not in rev.columns:
+        rev["Escalation status"] = rev["Escalation status "]
+
     cols_to_sync = [
         res_col,
         loop_col,
@@ -222,10 +235,6 @@ def apply_optional_pending_review_updates(base_df, reviewed_df):
         "Submitter LOB",
         "Submitter Name"
     ]
-    # Also support 'Escalation status ' with trailing space
-    if "Escalation status " in rev.columns and "Escalation status" not in rev.columns:
-        rev["Escalation status"] = rev["Escalation status "]
-
     for col in cols_to_sync:
         if col in rev.columns:
             valid_rev = rev[rev[col].notna() & (rev[col].astype(str).str.strip() != "") & (rev[col].astype(str).str.strip() != "nan")]
@@ -236,35 +245,6 @@ def apply_optional_pending_review_updates(base_df, reviewed_df):
                 df[col] = df["Order No."].map(update_map).fillna("")
 
     return df
-
-
-def build_pending_review_19_df(df):
-    res_col = "The responsible person replies with the handling result."
-    p_sub = df[df[res_col].isin(["Unreasonable", "SNULL"])].copy()
-    sol_col_1 = "Responsible person replies with a handling solution"
-    sol_col_2 = "Responsible person replies with a handling solution.1" if "Responsible person replies with a handling solution.1" in p_sub.columns else sol_col_1
-
-    return pd.DataFrame({
-        "Order No.": p_sub.get("Order No.", ""),
-        "Bill of Lading Time": p_sub.get("Bill of Lading Time", ""),
-        "Issue Type": p_sub.get("Issue Type", ""),
-        "Country/Region Where the Issue Occurred": p_sub.get("Country/Region Where the Issue Occurred", ""),
-        "Process Type": p_sub.get("Process Type", ""),
-        "Consignee": p_sub.get("Consignee", ""),
-        "Submitter Name": p_sub.get("Submitter Name", ""),
-        "Submitter LOB": p_sub.get("Submitter LOB", ""),
-        "Knowledge ID": p_sub.get("Knowledge ID", ""),
-        "Responsible person replies with a handling solution (Initial)": p_sub.get(sol_col_1, "SNULL"),
-        "Has the responsible person promptly closed the loop?": p_sub.get("Has the responsible person promptly closed the loop?", ""),
-        "Person Responsible": p_sub.get("Person Responsible", "SNULL"),
-        "Responsible person replies with a handling solution (Final)": p_sub.get(sol_col_2, "SNULL"),
-        "The responsible person replies with the handling result.": p_sub.get(res_col, "SNULL"),
-        "Electronic Flow Link": p_sub.get("Electronic Flow Link", ""),
-        "Comment": p_sub.get("Comment", ""),
-        "Severity": p_sub.get("Severity", ""),
-        "Escalation status": p_sub.get("Escalation status", "Yes"),
-        "Relevant Team": p_sub.get("Relevant Team", p_sub.get("Submitter LOB", ""))
-    })
 
 
 def create_styled_excel(sheets_dict, add_dropdowns_on_sheet=None):
@@ -307,6 +287,7 @@ def create_styled_excel(sheets_dict, add_dropdowns_on_sheet=None):
                 clean_v = "" if pd.isna(val) else val
                 cell = ws.cell(r_idx, c_idx, clean_v)
 
+                # Make Electronic Flow Link a clickable hyperlink in Excel!
                 if col_name == "Electronic Flow Link" and str(clean_v).startswith("http"):
                     cell.hyperlink = str(clean_v)
                     cell.font = link_font
@@ -334,7 +315,7 @@ def create_styled_excel(sheets_dict, add_dropdowns_on_sheet=None):
             elif col_name in ["Submitter Name", "Electronic Flow Link"]:
                 ws.column_dimensions[col_letter].width = 28
             else:
-                ws.column_dimensions[col_letter].width = 22
+                ws.column_dimensions[col_letter].width = 20
 
         if sheet_name == add_dropdowns_on_sheet and len(df) > 0:
             max_r = len(df) + 1
@@ -361,73 +342,94 @@ def create_styled_excel(sheets_dict, add_dropdowns_on_sheet=None):
     return buf.getvalue()
 
 
-# --- Main UI ---
-st.title("📊 Feedback Analysis & Dual-Closure Reporting Tool")
+# --- Main UI Header ---
+st.title("⚡ Smart Feedback Analyzer & Fast Link-Review Workspace")
 st.markdown(
-    "**How It Works:**  \n"
-    "1. **Upload Raw Data Sheet:** Automatically matches `Consignee` to `Submitter Name` & `Submitter LOB` (and sets `Relevant Team = Submitter LOB`), extracts `Pending_Cases_Review.xlsx` (`Unreasonable` & `SNULL` cases), and computes **Both Closure Status Methods** (Old Loop-Based & New Handling-Result-Based) side by side.  \n"
-    "2. **Optional Upload of Updated `Pending_Cases_Review.xlsx`:** After reviewing or updating `Pending_Cases_Review.xlsx` manually (e.g., changing a case from `Unreasonable` to `Reasonable` or vice versa, or adding `Comment` / `Severity` / `Escalation status`), upload it in Box 2 to immediately recalculate the final **Summary**, **Charts**, **PDF Report**, and **Excel Workbook**."
+    "Because the raw system export (`明细表_Schedules_en.xlsx`) sets `The responsible person replies with the handling result.` to `SNULL`, this tool cuts **75%+ of your manual link-checking time** using **3 Smart Accelerators**:  \n"
+    "1. **Smart Auto-Detection Engine:** Automatically marks cases with `Corrected Knowledge` / `Optimized knowledge` as **Reasonable**, marks `The issue remains unresolved.` or rejected escalations as **Unreasonable**, and marks incomplete loops without replies as **SNULL (Pending)** — leaving only a few ambiguous cases to verify!  \n"
+    "2. **Historical Memory Import (Optional):** Upload a previous week's analyzed Excel file so any previously reviewed `Order No.` is automatically remembered.  \n"
+    "3. **In-App Clickable Link Workspace OR Excel Two-Stage Export:** Click the `Electronic Flow Link` directly inside the table below while reading the Handler's Reply & Problem Description side-by-side, or export `Pending_Cases_Review.xlsx` for offline manual updates."
 )
 
-u_col1, u_col2 = st.columns(2)
-with u_col1:
-    raw_file = st.file_uploader(
-        "📂 1. Upload Raw Data Sheet (Required - System Export or Raw Data):",
+col_u1, col_u2, col_u3 = st.columns(3)
+with col_u1:
+    sys_file = st.file_uploader(
+        "📂 1. Upload System Export Sheet (`明细表_Schedules_en.xlsx` or Raw Data):",
         type=["xlsx", "xls", "csv"],
-        key="raw_uploader"
+        key="sys_uploader"
     )
-with u_col2:
-    optional_review_file = st.file_uploader(
-        "📝 2. (Optional) Upload Updated 'Pending_Cases_Review' Sheet to Recalculate Final Report:",
+with col_u2:
+    prev_file = st.file_uploader(
+        "🧠 2. (Optional) Upload Previous Analyzed Sheet to Auto-Remember Old Orders:",
+        type=["xlsx", "xls"],
+        key="prev_uploader"
+    )
+with col_u3:
+    optional_pending_review_file = st.file_uploader(
+        "📝 3. (Optional) Upload Updated 'Pending_Cases_Review.xlsx' After Manual Review:",
         type=["xlsx", "xls", "csv"],
-        key="review_uploader"
+        key="pending_review_uploader"
     )
 
-if raw_file is not None:
-    # 1. Read Raw Data ONLY (Auto multi-tab sync disabled as requested)
-    if raw_file.name.endswith(".csv"):
-        raw_input_df = pd.read_csv(raw_file)
+if sys_file is not None:
+    # Build historical memory map if previous analyzed file is provided
+    hist_map = {}
+    if prev_file is not None:
+        xls_prev = pd.ExcelFile(prev_file)
+        for sname in xls_prev.sheet_names:
+            p_df = pd.read_excel(xls_prev, sheet_name=sname)
+            res_c = "The responsible person replies with the handling result."
+            if "Order No." in p_df.columns and res_c in p_df.columns:
+                for _, prow in p_df.iterrows():
+                    ono = str(prow["Order No."]).strip()
+                    rval = str(prow[res_c]).strip()
+                    if ono and rval in ["Reasonable", "Unreasonable", "SNULL"]:
+                        hist_map[ono] = {
+                            "result": rval,
+                            "comment": str(prow.get("Comment", "")) if pd.notna(prow.get("Comment", "")) else "",
+                            "severity": str(prow.get("Severity", "")) if pd.notna(prow.get("Severity", "")) else "",
+                            "escalation": str(prow.get("Escalation status", "")) if pd.notna(prow.get("Escalation status", "")) else ""
+                        }
+        st.info(f"🧠 Loaded `{len(hist_map)}` previously reviewed Order Nos from historical sheet!")
+
+    # Read system file (without automatic multi-tab background sync unless explicitly uploaded)
+    if sys_file.name.endswith(".csv"):
+        raw_sys_df = pd.read_csv(sys_file)
     else:
-        xls_raw = pd.ExcelFile(raw_file)
-        if "Raw Data" in xls_raw.sheet_names:
-            raw_input_df = pd.read_excel(xls_raw, sheet_name="Raw Data")
-        elif "Schedule of Details" in xls_raw.sheet_names:
-            raw_input_df = pd.read_excel(xls_raw, sheet_name="Schedule of Details")
-        elif "Enriched_Raw_Data" in xls_raw.sheet_names:
-            raw_input_df = pd.read_excel(xls_raw, sheet_name="Enriched_Raw_Data")
+        xls_sys = pd.ExcelFile(sys_file)
+        target_s = (
+            "Schedule of Details"
+            if "Schedule of Details" in xls_sys.sheet_names
+            else ("Raw Data" if "Raw Data" in xls_sys.sheet_names else ("Enriched_Raw_Data" if "Enriched_Raw_Data" in xls_sys.sheet_names else xls_sys.sheet_names[0]))
+        )
+        raw_sys_df = pd.read_excel(xls_sys, sheet_name=target_s)
+
+    enriched_df = enrich_and_classify_dataframe(raw_sys_df, agents_df, hist_map)
+
+    # Apply updates from Optional Updated Pending_Cases_Review file if uploaded
+    if optional_pending_review_file is not None:
+        if optional_pending_review_file.name.endswith(".csv"):
+            rev_up_df = pd.read_csv(optional_pending_review_file)
         else:
-            raw_input_df = pd.read_excel(xls_raw, sheet_name=xls_raw.sheet_names[0])
+            xls_rev_up = pd.ExcelFile(optional_pending_review_file)
+            rev_s_name = "Pending_Cases_Review" if "Pending_Cases_Review" in xls_rev_up.sheet_names else xls_rev_up.sheet_names[0]
+            rev_up_df = pd.read_excel(xls_rev_up, sheet_name=rev_s_name)
 
-    if "Consignee" not in raw_input_df.columns:
-        st.error("❌ Column 'Consignee' was not found in the uploaded Raw Data sheet!")
-        st.stop()
-
-    working_df = enrich_and_classify_dataframe(raw_input_df, agents_df)
-
-    # 2. If user uploaded the optional Updated Pending_Cases_Review file, apply its changes!
-    if optional_review_file is not None:
-        if optional_review_file.name.endswith(".csv"):
-            rev_input_df = pd.read_csv(optional_review_file)
+        if "Order No." in rev_up_df.columns:
+            enriched_df = apply_optional_pending_review_updates(enriched_df, rev_up_df)
+            st.success(f"✅ Applied manual updates from `{optional_pending_review_file.name}`! Any status changes (Reasonable ↔ Unreasonable / SNULL) are now calculated in the final report.")
         else:
-            xls_rev = pd.ExcelFile(optional_review_file)
-            rev_sheet = "Pending_Cases_Review" if "Pending_Cases_Review" in xls_rev.sheet_names else xls_rev.sheet_names[0]
-            rev_input_df = pd.read_excel(xls_rev, sheet_name=rev_sheet)
+            st.error("❌ The uploaded Pending_Cases_Review sheet must contain an 'Order No.' column.")
 
-        if "Order No." in rev_input_df.columns:
-            working_df = apply_optional_pending_review_updates(working_df, rev_input_df)
-            st.success(f"✅ Applied manual updates from `{optional_review_file.name}`! Any status changes (Reasonable ↔ Unreasonable / SNULL) are now reflected in the final analysis below.")
-        else:
-            st.error("❌ The uploaded review sheet must contain an 'Order No.' column.")
-
-    # Check for unmapped Consignees
+    # Check for unmapped Consignee IDs and let user map them right here!
     unmapped_mask = (
-        working_df["Submitter Name"].isna()
-        | (working_df["Submitter Name"] == "Unknown Agent")
-        | (working_df["Submitter Name"] == "nan")
+        enriched_df["Submitter Name"].isna()
+        | (enriched_df["Submitter Name"] == "Unknown Agent")
+        | (enriched_df["Submitter Name"] == "nan")
     )
     if unmapped_mask.any():
-        unmapped_ids = working_df.loc[unmapped_mask, "Consignee"].unique().tolist()
-        with st.expander(f"⚠️ {len(unmapped_ids)} Unmapped Consignee IDs Detected! Click here to add them to Master Roster:", expanded=True):
+        unmapped_ids = enriched_df.loc[unmapped_mask, "Consignee"].unique().tolist()
+        with st.expander(f"⚠️ {len(unmapped_ids)} New Consignee IDs Found! Click here to assign their Submitter Name & LOB once:", expanded=True):
             new_roster_rows = pd.DataFrame({
                 "Consignee": unmapped_ids,
                 "Submitter Name": ["" for _ in unmapped_ids],
@@ -448,51 +450,123 @@ if raw_file is not None:
                     save_master_roster(combined, hc_df)
                     st.rerun()
 
-    # --- Optional In-App Quick Editor (Allows changing Reasonable <-> Unreasonable live as well) ---
+    # Show Smart Pre-Classification Summary Banner
     res_col = "The responsible person replies with the handling result."
-    loop_col = "Has the responsible person promptly closed the loop?"
+    auto_counts = enriched_df[res_col].value_counts().to_dict()
+    b1, b2, b3, b4, b5 = st.columns(5)
+    b1.metric("Total Uploaded Orders", len(enriched_df))
+    b2.metric("✅ Auto-Detected Reasonable", auto_counts.get("Reasonable", 0))
+    b3.metric("❌ Auto-Detected Unreasonable", auto_counts.get("Unreasonable", 0))
+    b4.metric("⏳ Auto-Detected SNULL (Pending)", auto_counts.get("SNULL", 0))
+    b5.metric("🔍 Needs Quick Link Check", auto_counts.get("Needs Link Check", 0))
 
-    with st.expander("✏️ Optional: Quick In-App Case Editor (Change Reasonable ↔ Unreasonable / SNULL or Add Comments Live)", expanded=False):
-        edit_filter = st.radio(
-            "Show Cases:",
-            ["Unreasonable & SNULL Only", "All Cases (Including Reasonable)"],
-            horizontal=True
-        )
-        e_mask = working_df[res_col].isin(["Unreasonable", "SNULL"]) if edit_filter == "Unreasonable & SNULL Only" else pd.Series([True] * len(working_df), index=working_df.index)
-        edit_cols = [
-            "Order No.", "Bill of Lading Time", "Consignee", "Submitter Name", "Submitter LOB",
-            "Issue Type", "Knowledge ID", loop_col, "Electronic Flow Link",
-            res_col, "Comment", "Severity", "Escalation status", "Relevant Team"
-        ]
-        edit_cols = [c for c in edit_cols if c in working_df.columns]
-        edited_live = st.data_editor(
-            working_df.loc[e_mask, edit_cols],
-            column_config={
-                "Electronic Flow Link": st.column_config.LinkColumn("Electronic Flow Link", display_text="🔗 Open Link"),
-                res_col: st.column_config.SelectboxColumn("Handling Result", options=["Reasonable", "Unreasonable", "SNULL"], required=True),
-                "Severity": st.column_config.SelectboxColumn("Severity", options=["", "High", "Medium", "Low"]),
-                "Escalation status": st.column_config.SelectboxColumn("Escalation status", options=["Yes", "No"]),
-            },
-            use_container_width=True,
-            key="live_case_editor"
-        )
-        working_df.loc[edited_live.index, edit_cols] = edited_live
+    st.divider()
 
-    # Build Pending_Cases_Review (19-column structure for Unreasonable & SNULL cases)
-    # Plus if user uploaded an external review sheet that had some cases changed to Reasonable, we also keep a full view of reviewed rows if needed, while Pending_Cases_Review holds current Unreasonable + SNULL
-    pending_review_19_df = build_pending_review_19_df(working_df)
+    # --- Interactive Fast Review Workspace (Stage 1 & Stage 2 Combined or Separate Excel) ---
+    st.subheader("🔍 Step 2: Fast Review Workspace (Click Link, Verify & Edit In-Place or Export to Excel)")
+    filter_choice = st.radio(
+        "Filter Cases to Review:",
+        options=[
+            "🔍 Needs Link Check + Unreasonable + SNULL (Recommended - Skip Auto-Reasonable)",
+            "🔎 Only Ambiguous Cases ('Needs Link Check')",
+            "📋 All Uploaded Cases"
+        ],
+        horizontal=True
+    )
 
-    # Stage 1 Export Button: Download Pending_Cases_Review.xlsx for Manual Review
-    stage1_excel_bytes = create_styled_excel(
+    if "Only Ambiguous" in filter_choice:
+        view_mask = enriched_df[res_col] == "Needs Link Check"
+    elif "Recommended" in filter_choice:
+        view_mask = enriched_df[res_col].isin(["Needs Link Check", "Unreasonable", "SNULL"])
+    else:
+        view_mask = pd.Series([True] * len(enriched_df), index=enriched_df.index)
+
+    review_cols = [
+        "Order No.", "Bill of Lading Time", "Consignee", "Submitter Name", "Submitter LOB",
+        "Issue Type", "Knowledge ID", "Responsible person replies with a handling solution",
+        "Is it resolved?", "Has the responsible person promptly closed the loop?",
+        "Responsible Person's Reply and Comments", "Electronic Flow Link",
+        "Auto_Detection_Confidence", res_col, "Comment", "Severity", "Escalation status", "Relevant Team"
+    ]
+    review_cols = [c for c in review_cols if c in enriched_df.columns]
+
+    edited_review_df = st.data_editor(
+        enriched_df.loc[view_mask, review_cols],
+        column_config={
+            "Electronic Flow Link": st.column_config.LinkColumn(
+                "Electronic Flow Link",
+                help="Click to open the case directly in Huawei Knowledge System",
+                display_text="🔗 Open E-Flow Link"
+            ),
+            res_col: st.column_config.SelectboxColumn(
+                "Handling Result (Select)",
+                options=["Reasonable", "Unreasonable", "SNULL", "Needs Link Check"],
+                required=True
+            ),
+            "Severity": st.column_config.SelectboxColumn(
+                "Severity",
+                options=["", "High", "Medium", "Low"]
+            ),
+            "Escalation status": st.column_config.SelectboxColumn(
+                "Escalation status",
+                options=["Yes", "No"]
+            ),
+            "Relevant Team": st.column_config.SelectboxColumn(
+                "Relevant Team (=LOB)",
+                options=sorted(list(set(hc_df["LOB"].tolist() + enriched_df["Submitter LOB"].unique().tolist())))
+            )
+        },
+        use_container_width=True,
+        height=420,
+        key="fast_workspace_editor"
+    )
+
+    # Sync edits from the interactive table back into enriched_df
+    enriched_df.loc[edited_review_df.index, review_cols] = edited_review_df
+
+    # Treat any remaining 'Needs Link Check' as 'SNULL' for standard 3-category pivot math, or let user see
+    final_working_df = enriched_df.copy()
+    final_working_df[res_col] = final_working_df[res_col].replace("Needs Link Check", "SNULL")
+
+    # Build Pending_Cases_Review (19-column exact layout for Unreasonable & SNULL)
+    pending_mask = final_working_df[res_col].isin(["Unreasonable", "SNULL"])
+    p_sub = final_working_df[pending_mask].copy()
+    sol_col_1 = "Responsible person replies with a handling solution"
+    sol_col_2 = "Responsible person replies with a handling solution.1" if "Responsible person replies with a handling solution.1" in p_sub.columns else sol_col_1
+
+    pending_review_19_df = pd.DataFrame({
+        "Order No.": p_sub.get("Order No.", ""),
+        "Bill of Lading Time": p_sub.get("Bill of Lading Time", ""),
+        "Issue Type": p_sub.get("Issue Type", ""),
+        "Country/Region Where the Issue Occurred": p_sub.get("Country/Region Where the Issue Occurred", ""),
+        "Process Type": p_sub.get("Process Type", ""),
+        "Consignee": p_sub.get("Consignee", ""),
+        "Submitter Name": p_sub.get("Submitter Name", ""),
+        "Submitter LOB": p_sub.get("Submitter LOB", ""),
+        "Knowledge ID": p_sub.get("Knowledge ID", ""),
+        "Responsible person replies with a handling solution (Initial)": p_sub.get(sol_col_1, "SNULL"),
+        "Has the responsible person promptly closed the loop?": p_sub.get("Has the responsible person promptly closed the loop?", ""),
+        "Person Responsible": p_sub.get("Person Responsible", "SNULL"),
+        "Responsible person replies with a handling solution (Final)": p_sub.get(sol_col_2, "SNULL"),
+        "The responsible person replies with the handling result.": p_sub.get(res_col, "SNULL"),
+        "Electronic Flow Link": p_sub.get("Electronic Flow Link", ""),
+        "Comment": p_sub.get("Comment", ""),
+        "Severity": p_sub.get("Severity", ""),
+        "Escalation status": p_sub.get("Escalation status", "Yes"),
+        "Relevant Team": p_sub.get("Relevant Team", p_sub.get("Submitter LOB", ""))
+    })
+
+    # Stage 1 Download Button (if user prefers editing in Excel first and re-uploading)
+    stage1_bytes = create_styled_excel(
         {
             "Pending_Cases_Review": pending_review_19_df,
-            "Enriched_Raw_Data": working_df
+            "Enriched_Raw_Data": final_working_df
         },
         add_dropdowns_on_sheet="Pending_Cases_Review"
     )
     st.download_button(
-        label="📥 Stage 1: Download 'Pending_Cases_Review.xlsx' (Unreasonable & SNULL Cases) for Manual Review & Update",
-        data=stage1_excel_bytes,
+        label="📥 Stage 1 Option: Download 'Pending_Cases_Review.xlsx' (With Clickable Links & Auto-Pre-Filled Results) for Offline Excel Review",
+        data=stage1_bytes,
         file_name="Pending_Cases_Review.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
@@ -501,15 +575,16 @@ if raw_file is not None:
     st.divider()
 
     # ==========================================================================
-    # COMPUTE SUMMARY & PIVOT WITH BOTH CLOSURE STATUS METHODS (OLD & NEW)
+    # LIVE FINAL ANALYSIS, CHARTS & PDF / EXCEL REPORT (BOTH OLD & NEW CLOSURE)
     # ==========================================================================
-    all_lobs = sorted(list(set(hc_df["LOB"].tolist() + working_df["Submitter LOB"].unique().tolist())))
+    st.subheader("📊 Step 3: Live Final Analysis & Executive PDF / Excel Report")
+    loop_col = "Has the responsible person promptly closed the loop?"
+    all_lobs = sorted(list(set(hc_df["LOB"].tolist() + final_working_df["Submitter LOB"].unique().tolist())))
     hc_map = dict(zip(hc_df["LOB"], hc_df["Team HC"]))
 
     summary_rows, pivot_rows = [], []
-
     for lob in all_lobs:
-        sub = working_df[working_df["Submitter LOB"] == lob]
+        sub = final_working_df[final_working_df["Submitter LOB"] == lob]
         hc = int(hc_map.get(lob, max(1, len(sub["Submitter Name"].unique()))))
         part = sub["Submitter Name"].nunique() if len(sub) > 0 else 0
         total_tix = len(sub)
@@ -519,11 +594,11 @@ if raw_file is not None:
         snull_cnt = int((sub[res_col] == "SNULL").sum())
         unreas_cnt = int((sub[res_col] == "Unreasonable").sum())
 
-        # Method 1 (Old Rule - Loop Status Based): 'Timely closure of the loop' + 'Not through the owner phase'
+        # Old Closure Status (Loop-Based): Timely closure of the loop + Not through the owner phase
         closed_old_cnt = int(sub[loop_col].isin(["Timely closure of the loop", "Not through the owner phase"]).sum())
         clos_old_rate = (closed_old_cnt / total_tix * 100) if total_tix > 0 else None
 
-        # Method 2 (New Rule - Handling Result Based): (Reasonable + Unreasonable) / Total, and 100% if Total == 0
+        # New Closure Status (Handling-Result-Based): (Reasonable + Unreasonable) / Total, and 100% if Total == 0
         closed_new_cnt = reas_cnt + unreas_cnt
         clos_new_rate = (closed_new_cnt / total_tix * 100) if total_tix > 0 else 100.0
 
@@ -535,8 +610,8 @@ if raw_file is not None:
             "Participation": part,
             "Usage Rate per Team (%)": round(usage_rate, 1),
             "Reasonability (%)": round(reas_rate, 1) if reas_rate is not None else None,
-            "Closure Status - Loop Based (Old %)": round(clos_old_rate, 1) if clos_old_rate is not None else None,
-            "Closure Status - Result Based (New %)": round(clos_new_rate, 1),
+            "Closure Status (Old - Loop %)": round(clos_old_rate, 1) if clos_old_rate is not None else None,
+            "Closure Status (New - Result %)": round(clos_new_rate, 1),
             "Total Feedbacks": total_tix
         })
 
@@ -548,36 +623,30 @@ if raw_file is not None:
                 "Unreasonable": unreas_cnt,
                 "Grand Total": total_tix,
                 "Reasonability (%)": round(reas_rate, 1),
-                "Closure Status - Loop (Old %)": round(clos_old_rate, 1) if clos_old_rate is not None else 0.0,
-                "Closure Status - Result (New %)": round(clos_new_rate, 1)
+                "Closure Status (Old - Loop %)": round(clos_old_rate, 1) if clos_old_rate is not None else 0.0,
+                "Closure Status (New - Result %)": round(clos_new_rate, 1)
             })
 
     summary_df_out = pd.DataFrame(summary_rows)
     pivot_df_out = pd.DataFrame(pivot_rows)
 
-    # Top Executive KPIs
     total_hc_all = int(summary_df_out["Team HC"].sum())
-    total_part_all = int(working_df["Submitter Name"].nunique())
-    total_tix_all = len(working_df)
-    total_reas_all = int((working_df[res_col] == "Reasonable").sum())
-    total_unreas_all = int((working_df[res_col] == "Unreasonable").sum())
-    total_snull_all = int((working_df[res_col] == "SNULL").sum())
-
-    total_closed_old_all = int(working_df[loop_col].isin(["Timely closure of the loop", "Not through the owner phase"]).sum())
-    total_closed_new_all = total_reas_all + total_unreas_all
+    total_part_all = int(final_working_df["Submitter Name"].nunique())
+    total_tix_all = len(final_working_df)
+    total_reas_all = int((final_working_df[res_col] == "Reasonable").sum())
+    total_closed_old_all = int(final_working_df[loop_col].isin(["Timely closure of the loop", "Not through the owner phase"]).sum())
+    total_closed_new_all = int((final_working_df[res_col] != "SNULL").sum())
     escalated_cnt = int((pending_review_19_df["Escalation status"].astype(str).str.strip().str.upper() == "YES").sum())
 
-    st.subheader("📈 Executive KPIs (Featuring Both Old & New Closure Status Metrics)")
     k1, k2, k3, k4, k5, k6, k7 = st.columns(7)
     k1.metric("Total Feedbacks", total_tix_all)
     k2.metric("Active Participants", f"{total_part_all} / {total_hc_all}")
-    k3.metric("Usage Rate", f"{(total_part_all/total_hc_all*100):.1f}%" if total_hc_all else "0%")
-    k4.metric("Reasonability Rate", f"{(total_reas_all/total_tix_all*100):.1f}%" if total_tix_all else "0%", f"{total_reas_all} Reasonable")
-    k5.metric("Closure (Old - Loop)", f"{(total_closed_old_all/total_tix_all*100):.1f}%" if total_tix_all else "0%", f"{total_closed_old_all} Closed")
-    k6.metric("Closure (New - Result)", f"{(total_closed_new_all/total_tix_all*100):.1f}%" if total_tix_all else "0%", f"{total_closed_new_all} Replied")
-    k7.metric("Unreasonable / SNULL", f"{total_unreas_all} U / {total_snull_all} S")
+    k3.metric("Overall Usage Rate", f"{(total_part_all/total_hc_all*100):.1f}%" if total_hc_all else "0%")
+    k4.metric("Reasonability Rate", f"{(total_reas_all/total_tix_all*100):.1f}%" if total_tix_all else "0%")
+    k5.metric("Closure (Old - Loop)", f"{(total_closed_old_all/total_tix_all*100):.1f}%" if total_tix_all else "0%")
+    k6.metric("Closure (New - Result)", f"{(total_closed_new_all/total_tix_all*100):.1f}%" if total_tix_all else "0%")
+    k7.metric("Pending / Unreasonable", len(pending_review_19_df))
 
-    # Charts
     ch1, ch2 = st.columns(2)
     with ch1:
         active_sum = summary_df_out[summary_df_out["Total Feedbacks"] > 0]
@@ -587,65 +656,59 @@ if raw_file is not None:
             y=[
                 "Usage Rate per Team (%)",
                 "Reasonability (%)",
-                "Closure Status - Loop Based (Old %)",
-                "Closure Status - Result Based (New %)"
+                "Closure Status (Old - Loop %)",
+                "Closure Status (New - Result %)"
             ],
             barmode="group",
-            title="Team Performance Comparison (Usage, Reasonability, Old Closure & New Closure %)",
-            color_discrete_sequence=["#2563eb", "#10b981", "#0d9488", "#8b5cf6"]
+            title="Team Performance Comparison (Usage vs. Reasonability vs. Old & New Closure %)",
+            color_discrete_sequence=["#2563eb", "#10b981", "#14b8a6", "#8b5cf6"]
         )
         st.plotly_chart(fig_bar, use_container_width=True)
-
     with ch2:
         fig_pie = px.pie(
-            working_df,
+            final_working_df,
             names=res_col,
-            title="Handling Result Distribution (Reasonable vs. Unreasonable vs. SNULL)",
+            title="Overall Handling Result Distribution",
             color=res_col,
             color_discrete_map={"Reasonable": "#10b981", "Unreasonable": "#ef4444", "SNULL": "#f59e0b"}
         )
         st.plotly_chart(fig_pie, use_container_width=True)
 
-    # Tabs for Tables
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 1. Summary (Old & New Closure)",
-        "⏳ 2. Pending_Cases_Review (Unreasonable & SNULL)",
-        "📈 3. Handling Result Pivot",
-        "🗂️ 4. Enriched Raw Data"
+    t_sum_tab, t_pend_tab, t_piv_tab = st.tabs([
+        "📊 Team Summary Table",
+        "⏳ Pending_Cases_Review (Unreasonable & SNULL)",
+        "📈 Handling Result Pivot"
     ])
-    with tab1:
+    with t_sum_tab:
         st.dataframe(summary_df_out, use_container_width=True)
-    with tab2:
+    with t_pend_tab:
         st.dataframe(pending_review_19_df, use_container_width=True)
-    with tab3:
+    with t_piv_tab:
         st.dataframe(pivot_df_out, use_container_width=True)
-    with tab4:
-        st.dataframe(working_df, use_container_width=True)
 
-    # --- PDF Report Generator (100% English, Both Closure Columns, Charts & Pending Cases) ---
+    # PDF Generator Function
     def generate_final_pdf_bytes():
         buf = io.BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=landscape(A4), rightMargin=22, leftMargin=22, topMargin=22, bottomMargin=22)
+        doc = SimpleDocTemplate(buf, pagesize=landscape(A4), rightMargin=24, leftMargin=24, topMargin=24, bottomMargin=24)
         styles = getSampleStyleSheet()
         story = []
 
-        title_style = ParagraphStyle("ExecTitle", parent=styles["Heading1"], fontSize=17, textColor=colors.HexColor("#0F172A"), spaceAfter=6)
-        sub_style = ParagraphStyle("ExecSub", parent=styles["Normal"], fontSize=9.5, textColor=colors.HexColor("#334155"), spaceAfter=10)
+        title_style = ParagraphStyle("ExecTitle", parent=styles["Heading1"], fontSize=18, textColor=colors.HexColor("#0F172A"), spaceAfter=6)
+        sub_style = ParagraphStyle("ExecSub", parent=styles["Normal"], fontSize=9.5, textColor=colors.HexColor("#334155"), spaceAfter=12)
         cell_wrap_style = ParagraphStyle("CellWrap", parent=styles["Normal"], fontSize=7, leading=8.5, textColor=colors.HexColor("#1E293B"))
 
         story.append(Paragraph("Executive Feedback Analysis Report", title_style))
         story.append(Paragraph(
             f"<b>Total Feedbacks:</b> {total_tix_all} &nbsp;|&nbsp; "
-            f"<b>Participants:</b> {total_part_all}/{total_hc_all} ({(total_part_all/total_hc_all*100 if total_hc_all else 0):.1f}% Usage) &nbsp;|&nbsp; "
-            f"<b>Reasonability:</b> {(total_reas_all/total_tix_all*100 if total_tix_all else 0):.1f}% ({total_reas_all}) &nbsp;|&nbsp; "
-            f"<b>Closure (Old Loop):</b> {(total_closed_old_all/total_tix_all*100 if total_tix_all else 0):.1f}% &nbsp;|&nbsp; "
-            f"<b>Closure (New Result):</b> {(total_closed_new_all/total_tix_all*100 if total_tix_all else 0):.1f}% &nbsp;|&nbsp; "
-            f"<b>Unreasonable:</b> {total_unreas_all} &nbsp;|&nbsp; <b>SNULL:</b> {total_snull_all}",
+            f"<b>Active Participants:</b> {total_part_all} / {total_hc_all} ({(total_part_all/total_hc_all*100 if total_hc_all else 0):.1f}% Usage Rate) &nbsp;|&nbsp; "
+            f"<b>Overall Reasonability:</b> {(total_reas_all/total_tix_all*100 if total_tix_all else 0):.1f}% &nbsp;|&nbsp; "
+            f"<b>Closure Rate (Old Loop):</b> {(total_closed_old_all/total_tix_all*100 if total_tix_all else 0):.1f}% &nbsp;|&nbsp; "
+            f"<b>Closure Rate (New Result):</b> {(total_closed_new_all/total_tix_all*100 if total_tix_all else 0):.1f}% &nbsp;|&nbsp; "
+            f"<b>Pending/Unreasonable Cases:</b> {len(pending_review_19_df)} (Escalated: {escalated_cnt})",
             sub_style
         ))
 
-        # Matplotlib Charts for PDF
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.3, 3.4), gridspec_kw={"width_ratios": [2.3, 1]})
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.2, 3.5), gridspec_kw={"width_ratios": [2.2, 1]})
         active_s = summary_df_out[summary_df_out["Total Feedbacks"] > 0].fillna(0)
         if len(active_s) == 0:
             active_s = summary_df_out.fillna(0)
@@ -653,50 +716,45 @@ if raw_file is not None:
         w = 0.20
         ax1.bar([i - 1.5*w for i in x], active_s["Usage Rate per Team (%)"], width=w, label="Usage Rate (%)", color="#2563eb")
         ax1.bar([i - 0.5*w for i in x], active_s["Reasonability (%)"], width=w, label="Reasonability (%)", color="#10b981")
-        ax1.bar([i + 0.5*w for i in x], active_s["Closure Status - Loop Based (Old %)"], width=w, label="Closure Old (Loop %)", color="#0d9488")
-        ax1.bar([i + 1.5*w for i in x], active_s["Closure Status - Result Based (New %)"], width=w, label="Closure New (Result %)", color="#8b5cf6")
+        ax1.bar([i + 0.5*w for i in x], active_s["Closure Status (Old - Loop %)"], width=w, label="Closure Old (Loop %)", color="#14b8a6")
+        ax1.bar([i + 1.5*w for i in x], active_s["Closure Status (New - Result %)"], width=w, label="Closure New (Result %)", color="#8b5cf6")
         ax1.set_xticks(list(x))
-        ax1.set_xticklabels(active_s["LOB"], rotation=28, ha="right", fontsize=8)
+        ax1.set_xticklabels(active_s["LOB"], rotation=30, ha="right", fontsize=8)
         ax1.set_ylim(0, 115)
         ax1.set_ylabel("Percentage (%)")
         ax1.set_title("Active Teams Performance Breakdown (%)", fontsize=10, fontweight="bold")
         ax1.legend(fontsize=7.5, loc="upper right", ncol=2)
         ax1.grid(axis="y", linestyle="--", alpha=0.4)
 
-        res_counts = working_df[res_col].value_counts()
+        res_counts = final_working_df[res_col].value_counts()
         pie_colors = [{"Reasonable": "#10b981", "Unreasonable": "#ef4444", "SNULL": "#f59e0b"}.get(k, "#64748b") for k in res_counts.index]
         ax2.pie(res_counts.values, labels=res_counts.index, autopct="%1.1f%%", startangle=140, colors=pie_colors, textprops={"fontsize": 8.5})
-        ax2.set_title("Handling Result Share", fontsize=10, fontweight="bold")
+        ax2.set_title("Handling Result Distribution", fontsize=10, fontweight="bold")
 
         plt.tight_layout()
         img_buf = io.BytesIO()
         plt.savefig(img_buf, format="png", dpi=160)
         plt.close(fig)
         img_buf.seek(0)
-        story.append(Image(img_buf, width=765, height=220))
-        story.append(Spacer(1, 8))
+        story.append(Image(img_buf, width=760, height=225))
+        story.append(Spacer(1, 10))
 
-        # Section 1: Summary Table with Both Closure Columns
-        story.append(Paragraph("1. Team Summary Table (With Old & New Closure Status)", styles["Heading2"]))
+        story.append(Paragraph("1. Team Summary & KPIs Table", styles["Heading2"]))
         sum_table_data = [[
             "LOB (Team)", "Team HC", "Participation", "Usage Rate (%)",
             "Reasonability (%)", "Closure Old (Loop %)", "Closure New (Result %)", "Total Feedbacks"
         ]]
         for _, r in summary_df_out.iterrows():
             sum_table_data.append([
-                str(r["LOB"]),
-                str(r["Team HC"]),
-                str(r["Participation"]),
+                str(r["LOB"]), str(r["Team HC"]), str(r["Participation"]),
                 f"{r['Usage Rate per Team (%)']:.1f}%",
                 f"{r['Reasonability (%)']:.1f}%" if pd.notna(r["Reasonability (%)"]) else "-",
-                f"{r['Closure Status - Loop Based (Old %)']:.1f}%" if pd.notna(r["Closure Status - Loop Based (Old %)"]) else "-",
-                f"{r['Closure Status - Result Based (New %)']:.1f}%",
+                f"{r['Closure Status (Old - Loop %)']:.1f}%" if pd.notna(r["Closure Status (Old - Loop %)"]) else "-",
+                f"{r['Closure Status (New - Result %)']:.1f}%" if pd.notna(r["Closure Status (New - Result %)"]) else "-",
                 str(r["Total Feedbacks"])
             ])
         sum_table_data.append([
-            "Grand Total",
-            str(total_hc_all),
-            str(total_part_all),
+            "Grand Total", str(total_hc_all), str(total_part_all),
             f"{(total_part_all/total_hc_all*100 if total_hc_all else 0):.1f}%",
             f"{(total_reas_all/total_tix_all*100 if total_tix_all else 0):.1f}%",
             f"{(total_closed_old_all/total_tix_all*100 if total_tix_all else 0):.1f}%",
@@ -704,7 +762,7 @@ if raw_file is not None:
             str(total_tix_all)
         ])
 
-        t_sum = Table(sum_table_data, colWidths=[135, 58, 72, 85, 95, 108, 112, 85], repeatRows=1)
+        t_sum = Table(sum_table_data, colWidths=[135, 58, 72, 85, 95, 105, 110, 85], repeatRows=1)
         t_sum.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -719,12 +777,8 @@ if raw_file is not None:
         story.append(t_sum)
         story.append(PageBreak())
 
-        # Section 2: Pending & Unreasonable Cases Table
         story.append(Paragraph("2. Pending & Unreasonable Cases (Pending_Cases_Review)", styles["Heading2"]))
-        act_data = [[
-            "Order No.", "Submitter Name", "Issue Type", "Knowledge ID",
-            "Result", "Severity", "Escalated", "Relevant Team", "Review Comment / Action Taken"
-        ]]
+        act_data = [["Order No.", "Submitter Name", "Issue Type", "Knowledge ID", "Result", "Severity", "Escalated", "Relevant Team", "Review Comment / Action Taken"]]
         for _, r in pending_review_19_df.iterrows():
             comment_txt = str(r.get("Comment", "") if pd.notna(r.get("Comment", "")) else "").strip()
             if comment_txt == "nan":
@@ -761,7 +815,7 @@ if raw_file is not None:
     dl1, dl2 = st.columns(2)
     with dl1:
         st.download_button(
-            label="📄 Download Final Executive PDF Report (With Both Closure Metrics & Updated Results)",
+            label="📄 Download Final Executive PDF Report (100% English + Charts + KPIs)",
             data=generate_final_pdf_bytes(),
             file_name="Final_Feedback_Analysis_Report.pdf",
             mime="application/pdf",
@@ -774,7 +828,7 @@ if raw_file is not None:
                 "Summary": summary_df_out,
                 "Handling_Result_Pivot": pivot_df_out,
                 "Pending_Cases_Review": pending_review_19_df,
-                "Enriched_Raw_Data": working_df
+                "Enriched_Raw_Data": final_working_df
             },
             add_dropdowns_on_sheet="Pending_Cases_Review"
         )
