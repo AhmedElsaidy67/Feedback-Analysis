@@ -577,7 +577,7 @@ def render_report(agents_df, hc_df):
                     barmode="group",
                     text_auto=".2f",
                     title="Weekly Language Searching Share Trend (English vs. Arabic %)",
-                    color_discrete_map={"English": "#2563eb", "Arabic": "#10b981", "Arabic\n": "#10b981"}
+                    color_discrete_map={"English": "#2563eb", "Arabic": "#10b981"}
                 )
                 st.plotly_chart(fig_trend_l, use_container_width=True)
             st.dataframe(trend_lang_df, use_container_width=True)
@@ -736,7 +736,6 @@ def render_report(agents_df, hc_df):
 
             fig2, (ax2_l, ax2_r) = plt.subplots(1, 2, figsize=(11.0, 2.9), gridspec_kw={"width_ratios": [2.2, 1]})
             en_sub_pl = per_language_df[(per_language_df["Language Group"] == "en-us") & (per_language_df["Row Labels"] != "en-us")].sort_values("TOP 3 Clicks %", ascending=False)
-            ar_sub_pl = per_language_df[(per_language_df["Language Group"] == "ar-eg") & (per_language_df["Row Labels"] != "ar-eg")]
             x_pl = range(len(en_sub_pl))
             ax2_l.bar([i - 0.18 for i in x_pl], en_sub_pl["TOP 3 Clicks %"].fillna(0), width=0.35, label="English Top 3 %", color="#2563eb")
             ax2_l.bar([i + 0.18 for i in x_pl], en_sub_pl["No Click %"].fillna(0), width=0.35, label="English No Click %", color="#ef4444")
@@ -750,9 +749,7 @@ def render_report(agents_df, hc_df):
 
             ax2_r.pie(
                 [en_total_cnt, max(0, ar_total_cnt)],
-                labels=[f"English
-({lang_rate_df.iloc[0]['%']:.2f}%)", f"Arabic
-({lang_rate_df.iloc[1]['%']:.2f}%)"],
+                labels=[f"English ({lang_rate_df.iloc[0]['%']:.2f}%)", f"Arabic ({lang_rate_df.iloc[1]['%']:.2f}%)"],
                 autopct="%1.2f%%",
                 startangle=140,
                 colors=["#2563eb", "#10b981"],
@@ -762,7 +759,6 @@ def render_report(agents_df, hc_df):
             story.append(fig_to_rl_image(fig2, width_pt=770, height_pt=195))
             story.append(Spacer(1, 6))
 
-            # Side-by-side or stacked tables for Per Language & Language Searching Rate
             t_pl_data = [["Language", "Team (Row Labels)", "Grand Total", "Top 3 Clicks", "No Click", "TOP 3 Clicks %", "No Click %", "Achievement"]]
             for _, r in per_language_df.iterrows():
                 t_pl_data.append([
@@ -843,7 +839,6 @@ def render_report(agents_df, hc_df):
                 ax4_l.legend(fontsize=8)
                 ax4_l.grid(True, linestyle="--", alpha=0.4)
 
-                # Right chart: Click Position Distribution from Languages Data
                 pos_order_plot = ["0", "1", "2", "3", "4", "5", "No Click"]
                 pos_counts = [int((raw_df["Position_Clean"] == p).sum()) for p in pos_order_plot]
                 bars_p = ax4_r.bar(pos_order_plot, pos_counts, color=["#10b981", "#34d399", "#6ee7b7", "#60a5fa", "#93c5fd", "#bfdbfe", "#ef4444"])
@@ -857,7 +852,6 @@ def render_report(agents_df, hc_df):
                 story.append(fig_to_rl_image(fig4, width_pt=770, height_pt=185))
                 story.append(Spacer(1, 6))
 
-                # Trend Per Language Table
                 t_tl_headers = ["Language"] + wk_cols_l
                 t_tl_data = [t_tl_headers]
                 for _, r in trend_lang_df.iterrows():
@@ -876,7 +870,6 @@ def render_report(agents_df, hc_df):
                 story.append(tbl_tl)
                 story.append(Spacer(1, 8))
 
-            # Languages Data Matrix Table
             if len(lang_lob_pivot) > 0:
                 ld_cols = list(lang_lob_pivot.columns)
                 t_ld_data = [ld_cols]
@@ -949,7 +942,6 @@ def render_report(agents_df, hc_df):
                 use_container_width=True
             )
         with dl_c2:
-            # Export Excel without 'Arabic Agents Data' and 'English Agents Data' as requested
             excel_Bytes = export_multi_sheet_searching_excel({
                 "Languages Data": lang_lob_pivot,
                 "Per Agent": per_agent_df,
