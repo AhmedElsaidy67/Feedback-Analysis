@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageBreak, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -80,39 +80,55 @@ def compute_pos_metrics(sub_df):
     }
 
 
-def build_position_pivot_sheet(df, lang_filter, group_col):
+def build_languages_data_pivot_sheet(df):
     """
-    Reconstructs 'Arabic Agents Data', 'English Agents Data', or 'Languages Data'
-    with individual Position columns (0, 1, 2, ..., No Click) + Grand Total + Top 3/10 Clicks & %.
+    Reconstructs 'Languages Data' hierarchical sheet (ar-eg by LOB, en-us by LOB, plus Grand Total)
+    with individual Position columns (0, 1, 10, 2, ..., No Click) + Grand Total + Top 3/10 Clicks & %.
     """
-    sub = df[df["Language"] == lang_filter].copy() if lang_filter else df.copy()
-    if len(sub) == 0:
+    if len(df) == 0:
         return pd.DataFrame()
 
     pos_Order = ["0", "1", "10", "2", "3", "4", "5", "6", "7", "8", "9", "No Click"]
-    present_pos = [p for p in pos_Order if p in sub["Position_Clean"].unique()]
+    present_pos = [p for p in pos_Order if p in df["Position_Clean"].unique()]
 
     rows = []
-    for grp_val, grp_df in sub.groupby(group_col):
-        r_dict = {"Row Labels": grp_val}
+    for lang_val in ["ar-eg", "en-us"]:
+        sub_lang = df[df["Language"] == lang_val]
+        if len(sub_lang) == 0:
+            continue
+        # Language header summary row
+        m_lang = compute_pos_metrics(sub_lang)
+        lang_row = {"Row Labels": lang_val}
         for p in present_pos:
-            r_dict[p] = int((grp_df["Position_Clean"] == p).sum())
-        m = compute_pos_metrics(grp_df)
-        r_dict["Grand Total"] = m["Grand Total"]
-        r_dict["Top 3 Clicks"] = m["Top 3 Clicks"]
-        r_dict["Top 10 Clicks"] = m["Top 10 Clicks"]
-        r_dict["TOP 3 Clicks %"] = f"{m['Top 3 Clicks %']:.2f}%" if m["Top 3 Clicks %"] is not None else "0.00%"
-        r_dict["TOP 10 Clicks %"] = f"{m['Top 10 Clicks %']:.2f}%" if m["Top 10 Clicks %"] is not None else "0.00%"
-        r_dict["No Click %"] = f"{m['No Click %']:.2f}%" if m["No Click %"] is not None else "0.00%"
-        rows.append(r_dict)
+            lang_row[p] = int((sub_lang["Position_Clean"] == p).sum())
+        lang_row["Grand Total"] = m_lang["Grand Total"]
+        lang_row["Top 3 Clicks"] = m_lang["Top 3 Clicks"]
+        lang_row["Top 10 Clicks"] = m_lang["Top 10 Clicks"]
+        lang_row["TOP 3 Clicks %"] = f"{m_lang['Top 3 Clicks %']:.2f}%" if m_lang["Top 3 Clicks %"] is not None else "0.00%"
+        lang_row["TOP 10 Clicks %"] = f"{m_lang['Top 10 Clicks %']:.2f}%" if m_lang["Top 10 Clicks %"] is not None else "0.00%"
+        lang_row["No Click %"] = f"{m_lang['No Click %']:.2f}%" if m_lang["No Click %"] is not None else "0.00%"
+        rows.append(lang_row)
+
+        # LOB breakdown under each language
+        for lob_val, grp_df in sub_lang.groupby("LOB"):
+            r_dict = {"Row Labels": lob_val}
+            for p in present_pos:
+                r_dict[p] = int((grp_df["Position_Clean"] == p).sum())
+            m = compute_pos_metrics(grp_df)
+            r_dict["Grand Total"] = m["Grand Total"]
+            r_dict["Top 3 Clicks"] = m["Top 3 Clicks"]
+            r_dict["Top 10 Clicks"] = m["Top 10 Clicks"]
+            r_dict["TOP 3 Clicks %"] = f"{m['Top 3 Clicks %']:.2f}%" if m["Top 3 Clicks %"] is not None else "0.00%"
+            r_dict["TOP 10 Clicks %"] = f"{m['Top 10 Clicks %']:.2f}%" if m["Top 10 Clicks %"] is not None else "0.00%"
+            r_dict["No Click %"] = f"{m['No Click %']:.2f}%" if m["No Click %"] is not None else "0.00%"
+            rows.append(r_dict)
 
     out_df = pd.DataFrame(rows)
-    # Add Grand Total row
     if len(out_df) > 0:
-        tot_m = compute_pos_metrics(sub)
+        tot_m = compute_pos_metrics(df)
         gt_row = {"Row Labels": "Grand Total"}
         for p in present_pos:
-            gt_row[p] = int((sub["Position_Clean"] == p).sum())
+            gt_row[p] = int((df["Position_Clean"] == p).sum())
         gt_row["Grand Total"] = tot_m["Grand Total"]
         gt_row["Top 3 Clicks"] = tot_m["Top 3 Clicks"]
         gt_row["Top 10 Clicks"] = tot_m["Top 10 Clicks"]
@@ -180,11 +196,11 @@ def export_multi_sheet_searching_excel(sheets_dict):
 
 
 def render_report(agents_df, hc_df):
-    st.title("🔍 Searching Accuracy Report & Multi-Sheet Analyzer")
+    st.title("🔍 Searching Accuracy Report & Executive PDF Generator")
     st.markdown(
         "**Automated End-to-End Workflow for `Searching accuracy report.xlsx`:**  \n"
         "1. Upload the raw **`Total RawData`** export (without `User Name` & `LOB`) or the full **`Searching accuracy report.xlsx`** workbook.  \n"
-        "2. The tool automatically matches **`User W3 Account`** against **`Master_Roster_DB.xlsx`**, populates **`User Name`** and **`LOB`**, and generates all **10 Report Sheets & 3 Executive Charts** (`Per Team`, `Per Agent`, `Per Language`, `Language Searching Rate`, `Trend Per Team`, `Trend Per Language Searching`, `Arabic Agents Data`, `English Agents Data`, `Languages Data`, and enriched `Total RawData`)."
+        "2. The tool automatically matches **`User W3 Account`** against **`Master_Roster_DB.xlsx`**, populates **`User Name`** and **`LOB`**, and organizes every remaining report section **paired side-by-side with its dedicated Chart** both in the interactive view and in the **Executive PDF Report** (ready to send via email to all teams)."
     )
 
     col_up1, col_up2 = st.columns(2)
@@ -205,7 +221,6 @@ def render_report(agents_df, hc_df):
         prev_trend_team_df = None
         prev_trend_lang_df = None
 
-        # Read Raw Data & any existing Trend sheets if a full workbook was uploaded
         if search_file.name.endswith(".csv"):
             raw_df = pd.read_csv(search_file)
         else:
@@ -307,9 +322,11 @@ def render_report(agents_df, hc_df):
         )
 
         # ======================================================================
-        # 1. BUILD 'Per Team' TABLE & CHART DATA
+        # BUILD ALL REMAINING REPORT TABLES (Removed Arabic & English Agents Data)
         # ======================================================================
         teams_list = sorted([t for t in raw_df["LOB"].unique() if t and t != "Unassigned LOB"])
+
+        # 1. Per Team Table
         per_team_rows = []
         for lob in teams_list:
             sub_t = raw_df[raw_df["LOB"] == lob]
@@ -337,12 +354,9 @@ def render_report(agents_df, hc_df):
                 "English Achievement Status": en_m["Achievement"] if en_m["Grand Total"] > 0 else None,
                 "Average Top 3 Clicks %": avg_t3_pct
             })
-
         per_team_df = pd.DataFrame(per_team_rows).sort_values(by="English Top 3 Clicks %", ascending=False)
 
-        # ======================================================================
-        # 2. BUILD 'Per Agent' TABLE
-        # ======================================================================
+        # 2. Per Agent Table
         per_agent_rows = []
         for (w3_acc, u_name, u_lob), grp in raw_df.groupby([w3_col, "User Name", "LOB"]):
             ar_m = compute_pos_metrics(grp[grp["Language"] == "ar-eg"])
@@ -370,9 +384,7 @@ def render_report(agents_df, hc_df):
             })
         per_agent_df = pd.DataFrame(per_agent_rows).sort_values(by=["English Top 3 Clicks %", "English Grand Total"], ascending=[False, False])
 
-        # ======================================================================
-        # 3. BUILD 'Per Language' & 'Language Searching Rate' TABLES
-        # ======================================================================
+        # 3. Per Language Table
         per_lang_rows = []
         for lang_code in ["ar-eg", "en-us"]:
             sub_l = raw_df[raw_df["Language"] == lang_code]
@@ -401,6 +413,7 @@ def render_report(agents_df, hc_df):
             })
         per_language_df = pd.DataFrame(per_lang_rows)
 
+        # 4. Language Searching Rate Table
         en_total_cnt = int((raw_df["Language"] == "en-us").sum())
         ar_total_cnt = int((raw_df["Language"] == "ar-eg").sum())
         all_total_cnt = len(raw_df)
@@ -410,11 +423,8 @@ def render_report(agents_df, hc_df):
             {"Language Searching Rate": "Total", "Count of Language": all_total_cnt, "%": 100.0}
         ])
 
-        # ======================================================================
-        # 4. BUILD WEEKLY TRENDS ('Trend Per Team' & 'Trend Per Language Searching')
-        # ======================================================================
+        # 5. Trend Per Team & 6. Trend Per Language Searching
         raw_df["Week_Bucket"] = raw_df["Date"].apply(assign_week_bucket)
-        # Preserve chronological order of weeks in raw_df
         week_order = raw_df.sort_values("Date")["Week_Bucket"].unique().tolist()
 
         if prev_trend_team_df is not None and len(prev_trend_team_df) > 0:
@@ -443,10 +453,9 @@ def render_report(agents_df, hc_df):
                 l_rows[1][wk] = round(ar_w / tot_w, 4) if tot_w else 0.0
             trend_lang_df = pd.DataFrame(l_rows)
 
-        # Build Pivot Sheets (Arabic Agents Data, English Agents Data, Languages Data)
-        ar_agents_pivot = build_position_pivot_sheet(raw_df, "ar-eg", w3_col)
-        en_agents_pivot = build_position_pivot_sheet(raw_df, "en-us", w3_col)
-        lang_lob_pivot = build_position_pivot_sheet(raw_df, None, "LOB")
+        # 7. Languages Data (Position 0..10 & No Click Matrix by Language & LOB)
+        lang_lob_pivot = build_languages_data_pivot_sheet(raw_df)
+        clean_raw_out = raw_df.drop(columns=["Position_Clean", "Week_Bucket"], errors="ignore")
 
         # ======================================================================
         # TOP EXECUTIVE KPIs
@@ -466,40 +475,77 @@ def render_report(agents_df, hc_df):
         st.divider()
 
         # ======================================================================
-        # THE 3 EXACT CHARTS FROM THE EXCEL WORKBOOK
+        # EACH REPORT SECTION PAIRED WITH ITS DEDICATED CHART (IN-APP & IN PDF)
         # ======================================================================
-        st.subheader("📊 Executive Charts (Matching Excel Workbook Charts)")
-        c_chart1, c_chart2 = st.columns([2, 1])
+        tabs = st.tabs([
+            "🏆 1. Per Team (+Chart)",
+            "🌐 2. Per Language (+Chart)",
+            "📊 3. Language Searching Rate (+Chart)",
+            "📈 4. Trend Per Team (+Chart)",
+            "📉 5. Trend Per Language (+Chart)",
+            "🔢 6. Languages Data Matrix (+Chart)",
+            "👤 7. Per Agent (+Chart)",
+            "🗂️ 8. Total RawData"
+        ])
 
-        with c_chart1:
-            # Chart 1: Searching Accuracy Per Team (Arabic Top 3%, Arabic No Click%, English Top 3%, English No Click%)
+        # --- Section 1: Per Team ---
+        with tabs[0]:
+            st.subheader("1. Searching Accuracy Per Team (Chart + Table)")
             chart_team_df = per_team_df.sort_values(by="Average Top 3 Clicks %", ascending=False).fillna(0)
             fig_team = px.bar(
                 chart_team_df,
                 x="Row Labels",
                 y=["Arabic Top 3 Clicks %", "Arabic No Click %", "English Top 3 Clicks %", "English No Click %"],
                 barmode="group",
-                title="1. Searching Accuracy Per Team (Top 3 Clicks % vs. No Click %)",
-                color_discrete_sequence=["#10b981", "#f59e0b", "#2563eb", "#ef4444"]
+                title="Searching Accuracy Per Team (Arabic & English Top 3 Clicks % vs. No Click %)",
+                color_discrete_sequence=["#10b981", "#f59e0b", "#2563eb", "#ef4444"],
+                text_auto=".1f"
             )
             fig_team.add_hline(y=90, line_dash="dash", line_color="#0f172a", annotation_text="90% Target")
             st.plotly_chart(fig_team, use_container_width=True)
+            st.dataframe(per_team_df, use_container_width=True)
 
-        with c_chart2:
-            # Chart 2: Language Searching Rate (English vs Arabic Share)
-            fig_lang_rate = px.pie(
-                lang_rate_df[lang_rate_df["Language Searching Rate"] != "Total"],
-                names="Language Searching Rate",
-                values="Count of Language",
-                title="2. Language Searching Rate (English vs. Arabic)",
-                color="Language Searching Rate",
-                color_discrete_map={"English": "#2563eb", "Arabic": "#10b981"}
+        # --- Section 2: Per Language ---
+        with tabs[1]:
+            st.subheader("2. Per Language Breakdown by Team (Chart + Table)")
+            pl_chart_df = per_language_df[~per_language_df["Row Labels"].isin(["ar-eg", "en-us"])].copy()
+            fig_pl = px.bar(
+                pl_chart_df,
+                x="Row Labels",
+                y=["TOP 3 Clicks %", "No Click %"],
+                facet_col="Language Group",
+                barmode="group",
+                title="Per Language Searching Accuracy (ar-eg vs. en-us) Across Teams",
+                color_discrete_sequence=["#10b981", "#ef4444"],
+                text_auto=".1f"
             )
-            st.plotly_chart(fig_lang_rate, use_container_width=True)
+            fig_pl.add_hline(y=90, line_dash="dash", line_color="#0f172a")
+            st.plotly_chart(fig_pl, use_container_width=True)
+            st.dataframe(per_language_df, use_container_width=True)
 
-        # Chart 3: Trend Per Team & Trend Per Language Searching
-        c_chart3, c_chart4 = st.columns(2)
-        with c_chart3:
+        # --- Section 3: Language Searching Rate ---
+        with tabs[2]:
+            st.subheader("3. Language Searching Rate (Chart + Table)")
+            c_lr1, c_lr2 = st.columns([1.3, 1])
+            with c_lr1:
+                fig_lang_rate = px.pie(
+                    lang_rate_df[lang_rate_df["Language Searching Rate"] != "Total"],
+                    names="Language Searching Rate",
+                    values="Count of Language",
+                    hole=0.38,
+                    title="Language Searching Share (English vs. Arabic)",
+                    color="Language Searching Rate",
+                    color_discrete_map={"English": "#2563eb", "Arabic": "#10b981"}
+                )
+                fig_lang_rate.update_traces(textinfo="label+percent+value")
+                st.plotly_chart(fig_lang_rate, use_container_width=True)
+            with c_lr2:
+                st.markdown("##### Language Searching Rate Table")
+                st.dataframe(lang_rate_df, use_container_width=True)
+
+        # --- Section 4: Trend Per Team ---
+        with tabs[3]:
+            st.subheader("4. Weekly Searching Accuracy Trend Per Team (Chart + Table)")
             wk_cols_t = [c for c in trend_team_df.columns if c not in ["Team", "Trend"]]
             if len(wk_cols_t) > 0:
                 melted_t = trend_team_df.melt(id_vars=["Team"], value_vars=wk_cols_t, var_name="Period", value_name="Top 3 Accuracy")
@@ -510,162 +556,361 @@ def render_report(agents_df, hc_df):
                     y="Top 3 Accuracy (%)",
                     color="Team",
                     markers=True,
-                    title="3. Weekly Searching Accuracy Trend Per Team (%)"
+                    title="Weekly Top 3 Clicks Accuracy Trend Per Team (%)"
                 )
+                fig_trend_t.add_hline(y=90, line_dash="dash", line_color="#0f172a", annotation_text="90% Target")
                 st.plotly_chart(fig_trend_t, use_container_width=True)
+            st.dataframe(trend_team_df, use_container_width=True)
 
-        with c_chart4:
+        # --- Section 5: Trend Per Language Searching ---
+        with tabs[4]:
+            st.subheader("5. Weekly Trend Per Language Searching (Chart + Table)")
             wk_cols_l = [c for c in trend_lang_df.columns if c != "Row Labels"]
             if len(wk_cols_l) > 0:
                 melted_l = trend_lang_df.melt(id_vars=["Row Labels"], value_vars=wk_cols_l, var_name="Period", value_name="Share")
                 melted_l["Searching Share (%)"] = pd.to_numeric(melted_l["Share"], errors="coerce") * 100.0
-                fig_trend_l = px.line(
+                fig_trend_l = px.bar(
                     melted_l,
                     x="Period",
                     y="Searching Share (%)",
                     color="Row Labels",
-                    markers=True,
-                    title="4. Trend Per Language Searching (English vs. Arabic %)"
+                    barmode="group",
+                    text_auto=".2f",
+                    title="Weekly Language Searching Share Trend (English vs. Arabic %)",
+                    color_discrete_map={"English": "#2563eb", "Arabic": "#10b981", "Arabic\n": "#10b981"}
                 )
                 st.plotly_chart(fig_trend_l, use_container_width=True)
-
-        # ======================================================================
-        # ALL REPORT TABS (EXACT MATCH TO WORKBOOK SHEETS)
-        # ======================================================================
-        tabs = st.tabs([
-            "🏆 Per Team",
-            "👤 Per Agent",
-            "🌐 Per Language & Rate",
-            "📈 Trend Per Team & Language",
-            "🔢 Arabic & English Pivot Data",
-            "🗂️ Enriched Total RawData"
-        ])
-
-        with tabs[0]:
-            st.dataframe(per_team_df, use_container_width=True)
-        with tabs[1]:
-            st.dataframe(per_agent_df, use_container_width=True)
-        with tabs[2]:
-            col_l1, col_l2 = st.columns([2, 1])
-            with col_l1:
-                st.markdown("##### Per Language Breakdown")
-                st.dataframe(per_language_df, use_container_width=True)
-            with col_l2:
-                st.markdown("##### Language Searching Rate")
-                st.dataframe(lang_rate_df, use_container_width=True)
-        with tabs[3]:
-            st.markdown("##### Trend Per Team")
-            st.dataframe(trend_team_df, use_container_width=True)
-            st.markdown("##### Trend Per Language Searching")
             st.dataframe(trend_lang_df, use_container_width=True)
-        with tabs[4]:
-            st.markdown("##### Arabic Agents Data (`ar-eg`)")
-            st.dataframe(ar_agents_pivot, use_container_width=True)
-            st.markdown("##### English Agents Data (`en-us`)")
-            st.dataframe(en_agents_pivot, use_container_width=True)
+
+        # --- Section 6: Languages Data Matrix ---
         with tabs[5]:
-            clean_raw_out = raw_df.drop(columns=["Position_Clean", "Week_Bucket"], errors="ignore")
+            st.subheader("6. Languages Data Click Position Matrix (Chart + Table)")
+            pos_order_chart = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "No Click"]
+            pos_dist = raw_df.groupby(["LOB", "Position_Clean"]).size().reset_index(name="Count")
+            fig_pos = px.bar(
+                pos_dist,
+                x="LOB",
+                y="Count",
+                color="Position_Clean",
+                category_orders={"Position_Clean": pos_order_chart},
+                title="Click Position Distribution (0, 1, 2 ... No Click) Across Teams",
+                color_discrete_sequence=px.colors.qualitative.Prism
+            )
+            st.plotly_chart(fig_pos, use_container_width=True)
+            st.dataframe(lang_lob_pivot, use_container_width=True)
+
+        # --- Section 7: Per Agent ---
+        with tabs[6]:
+            st.subheader("7. Per Agent Searching Accuracy (Chart + Table)")
+            ag_chart_df = per_agent_df.dropna(subset=["English Top 3 Clicks %"]).copy()
+            fig_ag = px.bar(
+                ag_chart_df.head(35),
+                x="Name",
+                y=["English Top 3 Clicks %", "English TOP 10 Clicks %", "English No Click %"],
+                barmode="group",
+                title="Agent Searching Accuracy Comparison (Top 35 Agents by Top 3 Clicks %)",
+                color_discrete_sequence=["#10b981", "#2563eb", "#ef4444"]
+            )
+            fig_ag.add_hline(y=90, line_dash="dash", line_color="#0f172a", annotation_text="90% Target")
+            fig_ag.update_layout(xaxis_tickangle=-35)
+            st.plotly_chart(fig_ag, use_container_width=True)
+            st.dataframe(per_agent_df, use_container_width=True)
+
+        # --- Section 8: Total RawData ---
+        with tabs[7]:
+            st.subheader("8. Enriched Total RawData (With User Name & LOB Added)")
             st.dataframe(clean_raw_out.head(500), use_container_width=True)
             st.caption(f"Showing first 500 rows of {len(clean_raw_out):,} total rows. All rows are included in the Excel export below.")
 
+        st.divider()
+
         # ======================================================================
-        # PDF EXECUTIVE REPORT GENERATOR FOR SEARCHING ACCURACY
+        # PDF EXECUTIVE REPORT GENERATOR (EVERY SECTION PAIRED WITH ITS CHART!)
         # ======================================================================
+        def fig_to_rl_image(fig, width_pt=750, height_pt=210):
+            img_buf = io.BytesIO()
+            fig.savefig(img_buf, format="png", dpi=180, bbox_inches="tight")
+            plt.close(fig)
+            img_buf.seek(0)
+            return Image(img_buf, width=width_pt, height=height_pt)
+
+        def style_pdf_table(tbl, header_bg="#1E293B", font_size=7.5):
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(header_bg)),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+                ("FONTSIZE", (0, 0), (-1, -1), font_size),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]))
+
         def generate_searching_pdf_bytes():
             buf = io.BytesIO()
-            doc = SimpleDocTemplate(buf, pagesize=landscape(A4), rightMargin=22, leftMargin=22, topMargin=22, bottomMargin=22)
+            doc = SimpleDocTemplate(
+                buf,
+                pagesize=landscape(A4),
+                rightMargin=20,
+                leftMargin=20,
+                topMargin=20,
+                bottomMargin=20
+            )
             styles = getSampleStyleSheet()
             story = []
 
-            title_style = ParagraphStyle("STitle", parent=styles["Heading1"], fontSize=18, textColor=colors.HexColor("#0F172A"), spaceAfter=6)
+            title_style = ParagraphStyle("STitle", parent=styles["Heading1"], fontSize=18, textColor=colors.HexColor("#0F172A"), spaceAfter=4)
+            sec_style = ParagraphStyle("SSec", parent=styles["Heading2"], fontSize=13, textColor=colors.HexColor("#1E3A8A"), spaceBefore=4, spaceAfter=6)
             sub_style = ParagraphStyle("SSub", parent=styles["Normal"], fontSize=9.5, textColor=colors.HexColor("#334155"), spaceAfter=10)
 
-            story.append(Paragraph("Executive Searching Accuracy Report", title_style))
+            # --- PAGE 1: SECTION 1 - PER TEAM (CHART + TABLE) ---
+            story.append(Paragraph("Executive Searching Accuracy Report (All Teams Overview)", title_style))
             story.append(Paragraph(
                 f"<b>Total Searches:</b> {all_total_cnt:,} &nbsp;|&nbsp; "
                 f"<b>Overall Top 3 Accuracy:</b> {overall_m['Top 3 Clicks %']:.2f}% ({overall_m['Top 3 Clicks']:,}) &nbsp;|&nbsp; "
                 f"<b>Overall Top 10 Accuracy:</b> {overall_m['Top 10 Clicks %']:.2f}% &nbsp;|&nbsp; "
                 f"<b>No Click Rate:</b> {overall_m['No Click %']:.2f}% ({overall_m['No Click']:,}) &nbsp;|&nbsp; "
-                f"<b>English Share:</b> {lang_rate_df.iloc[0]['%']:.2f}% &nbsp;|&nbsp; <b>Arabic Share:</b> {lang_rate_df.iloc[1]['%']:.2f}%",
+                f"<b>English Share:</b> {lang_rate_df.iloc[0]['%']:.2f}% ({en_total_cnt:,}) &nbsp;|&nbsp; "
+                f"<b>Arabic Share:</b> {lang_rate_df.iloc[1]['%']:.2f}% ({ar_total_cnt:,})",
                 sub_style
             ))
 
-            # Matplotlib Charts for PDF
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.2, 3.4), gridspec_kw={"width_ratios": [2.2, 1]})
+            story.append(Paragraph("Section 1: Searching Accuracy Per Team (Chart & Table)", sec_style))
+
+            # Chart 1: Per Team
+            fig1, ax1 = plt.subplots(figsize=(11.0, 3.1))
             ct = per_team_df.sort_values(by="Average Top 3 Clicks %", ascending=False).fillna(0)
             x = range(len(ct))
             w = 0.20
-            ax1.bar([i - 1.5*w for i in x], ct["Arabic Top 3 Clicks %"], width=w, label="Arabic Top 3 %", color="#10b981")
-            ax1.bar([i - 0.5*w for i in x], ct["Arabic No Click %"], width=w, label="Arabic No Click %", color="#f59e0b")
-            ax1.bar([i + 0.5*w for i in x], ct["English Top 3 Clicks %"], width=w, label="English Top 3 %", color="#2563eb")
-            ax1.bar([i + 1.5*w for i in x], ct["English No Click %"], width=w, label="English No Click %", color="#ef4444")
-            ax1.axhline(90, color="#0f172a", linestyle="--", linewidth=0.8, label="90% Target")
+            b_ar3 = ax1.bar([i - 1.5*w for i in x], ct["Arabic Top 3 Clicks %"], width=w, label="Arabic Top 3 Clicks %", color="#10b981")
+            b_arn = ax1.bar([i - 0.5*w for i in x], ct["Arabic No Click %"], width=w, label="Arabic No Click %", color="#f59e0b")
+            b_en3 = ax1.bar([i + 0.5*w for i in x], ct["English Top 3 Clicks %"], width=w, label="English Top 3 Clicks %", color="#2563eb")
+            b_enn = ax1.bar([i + 1.5*w for i in x], ct["English No Click %"], width=w, label="English No Click %", color="#ef4444")
+            ax1.axhline(90, color="#0f172a", linestyle="--", linewidth=1.0, label="90% Target")
             ax1.set_xticks(list(x))
-            ax1.set_xticklabels(ct["Row Labels"], rotation=25, ha="right", fontsize=8)
+            ax1.set_xticklabels(ct["Row Labels"], rotation=15, ha="right", fontsize=8.5, fontweight="bold")
             ax1.set_ylim(0, 115)
             ax1.set_ylabel("Percentage (%)")
-            ax1.set_title("Searching Accuracy Per Team (%)", fontsize=10, fontweight="bold")
-            ax1.legend(fontsize=7, loc="upper right", ncol=2)
+            ax1.set_title("Searching Accuracy Per Team (Arabic & English Top 3 Clicks % vs. No Click %)", fontsize=10.5, fontweight="bold")
+            ax1.legend(fontsize=8, loc="upper right", ncol=5)
             ax1.grid(axis="y", linestyle="--", alpha=0.4)
-
-            ax2.pie(
-                [en_total_cnt, max(0, ar_total_cnt)],
-                labels=[f"English ({lang_rate_df.iloc[0]['%']:.2f}%)", f"Arabic ({lang_rate_df.iloc[1]['%']:.2f}%)"],
-                autopct="%1.1f%%",
-                startangle=140,
-                colors=["#2563eb", "#10b981"],
-                textprops={"fontsize": 8.5}
-            )
-            ax2.set_title("Language Searching Rate", fontsize=10, fontweight="bold")
-
-            plt.tight_layout()
-            img_buf = io.BytesIO()
-            plt.savefig(img_buf, format="png", dpi=160)
-            plt.close(fig)
-            img_buf.seek(0)
-            story.append(Image(img_buf, width=760, height=220))
+            for bars in [b_ar3, b_en3]:
+                for bar in bars:
+                    h = bar.get_height()
+                    if h > 0:
+                        ax1.annotate(f"{h:.1f}%", xy=(bar.get_x() + bar.get_width()/2, h), xytext=(0, 2), textcoords="offset points", ha="center", va="bottom", fontsize=6.5, fontweight="bold")
+            story.append(fig_to_rl_image(fig1, width_pt=770, height_pt=215))
             story.append(Spacer(1, 8))
 
-            # Table 1: Per Team Summary
-            story.append(Paragraph("1. Searching Accuracy Per Team (Arabic & English Breakdown)", styles["Heading2"]))
+            # Table 1: Per Team
             t_team_data = [[
-                "Team (LOB)", "Ar Total", "Ar Top 3", "Ar Top 3 %", "Ar NoClick %", "Ar Ach.",
-                "En Total", "En Top 3", "En Top 3 %", "En NoClick %", "En Ach.", "Avg Top 3 %"
+                "Team (LOB)", "Ar Total", "Ar Top 3", "Ar NoClick", "Ar Top 3 %", "Ar NoClick %", "Ar Ach.",
+                "En Total", "En Top 3", "En NoClick", "En Top 3 %", "En NoClick %", "En Ach.", "Average Top 3 %"
             ]]
             for _, r in per_team_df.iterrows():
                 t_team_data.append([
                     str(r["Row Labels"]),
                     str(int(r["Arabic Grand Total"])) if pd.notna(r["Arabic Grand Total"]) else "-",
                     str(int(r["Arabic Top 3 Click"])) if pd.notna(r["Arabic Top 3 Click"]) else "-",
+                    str(int(r["Arabic No Click"])) if pd.notna(r["Arabic No Click"]) else "-",
                     f"{r['Arabic Top 3 Clicks %']:.2f}%" if pd.notna(r["Arabic Top 3 Clicks %"]) else "-",
                     f"{r['Arabic No Click %']:.2f}%" if pd.notna(r["Arabic No Click %"]) else "-",
                     str(r["Arabic Achievement Status"]) if pd.notna(r["Arabic Achievement Status"]) else "-",
                     str(int(r["English Grand Total"])) if pd.notna(r["English Grand Total"]) else "-",
                     str(int(r["English Top 3 Click"])) if pd.notna(r["English Top 3 Click"]) else "-",
+                    str(int(r["English No Click"])) if pd.notna(r["English No Click"]) else "-",
                     f"{r['English Top 3 Clicks %']:.2f}%" if pd.notna(r["English Top 3 Clicks %"]) else "-",
                     f"{r['English No Click %']:.2f}%" if pd.notna(r["English No Click %"]) else "-",
                     str(r["English Achievement Status"]) if pd.notna(r["English Achievement Status"]) else "-",
                     f"{r['Average Top 3 Clicks %']:.2f}%"
                 ])
-
-            tbl_team = Table(t_team_data, colWidths=[115, 50, 50, 62, 65, 45, 55, 55, 62, 65, 45, 68], repeatRows=1)
-            tbl_team.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-                ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-            ]))
+            tbl_team = Table(t_team_data, colWidths=[110, 42, 42, 46, 52, 54, 38, 48, 48, 48, 52, 54, 38, 65], repeatRows=1)
+            style_pdf_table(tbl_team, font_size=7.5)
             story.append(tbl_team)
             story.append(PageBreak())
 
-            # Table 2: Per Agent Summary
-            story.append(Paragraph("2. Searching Accuracy Per Agent", styles["Heading2"]))
+            # --- PAGE 2: SECTION 2 (PER LANGUAGE) & SECTION 3 (LANGUAGE SEARCHING RATE) ---
+            story.append(Paragraph("Section 2 & 3: Per Language Breakdown & Language Searching Rate (Charts & Tables)", sec_style))
+
+            fig2, (ax2_l, ax2_r) = plt.subplots(1, 2, figsize=(11.0, 2.9), gridspec_kw={"width_ratios": [2.2, 1]})
+            en_sub_pl = per_language_df[(per_language_df["Language Group"] == "en-us") & (per_language_df["Row Labels"] != "en-us")].sort_values("TOP 3 Clicks %", ascending=False)
+            ar_sub_pl = per_language_df[(per_language_df["Language Group"] == "ar-eg") & (per_language_df["Row Labels"] != "ar-eg")]
+            x_pl = range(len(en_sub_pl))
+            ax2_l.bar([i - 0.18 for i in x_pl], en_sub_pl["TOP 3 Clicks %"].fillna(0), width=0.35, label="English Top 3 %", color="#2563eb")
+            ax2_l.bar([i + 0.18 for i in x_pl], en_sub_pl["No Click %"].fillna(0), width=0.35, label="English No Click %", color="#ef4444")
+            ax2_l.axhline(90, color="#0f172a", linestyle="--", linewidth=0.9, label="90% Target")
+            ax2_l.set_xticks(list(x_pl))
+            ax2_l.set_xticklabels(en_sub_pl["Row Labels"], rotation=20, ha="right", fontsize=8)
+            ax2_l.set_ylim(0, 115)
+            ax2_l.set_title("Per Language (en-us) Top 3 % vs. No Click % by Team", fontsize=9.5, fontweight="bold")
+            ax2_l.legend(fontsize=7.5, loc="upper right")
+            ax2_l.grid(axis="y", linestyle="--", alpha=0.4)
+
+            ax2_r.pie(
+                [en_total_cnt, max(0, ar_total_cnt)],
+                labels=[f"English
+({lang_rate_df.iloc[0]['%']:.2f}%)", f"Arabic
+({lang_rate_df.iloc[1]['%']:.2f}%)"],
+                autopct="%1.2f%%",
+                startangle=140,
+                colors=["#2563eb", "#10b981"],
+                textprops={"fontsize": 8, "fontweight": "bold"}
+            )
+            ax2_r.set_title("Language Searching Rate Share", fontsize=9.5, fontweight="bold")
+            story.append(fig_to_rl_image(fig2, width_pt=770, height_pt=195))
+            story.append(Spacer(1, 6))
+
+            # Side-by-side or stacked tables for Per Language & Language Searching Rate
+            t_pl_data = [["Language", "Team (Row Labels)", "Grand Total", "Top 3 Clicks", "No Click", "TOP 3 Clicks %", "No Click %", "Achievement"]]
+            for _, r in per_language_df.iterrows():
+                t_pl_data.append([
+                    str(r["Language Group"]),
+                    str(r["Row Labels"]),
+                    f"{int(r['Grand Total']):,}",
+                    f"{int(r['Top 3 Clicks']):,}",
+                    f"{int(r['No Click']):,}",
+                    f"{r['TOP 3 Clicks %']:.2f}%" if pd.notna(r["TOP 3 Clicks %"]) else "-",
+                    f"{r['No Click %']:.2f}%" if pd.notna(r["No Click %"]) else "-",
+                    str(r["Achievement"])
+                ])
+            tbl_pl = Table(t_pl_data, colWidths=[65, 130, 75, 75, 65, 85, 75, 75], repeatRows=1)
+            style_pdf_table(tbl_pl, font_size=7.2)
+            story.append(tbl_pl)
+            story.append(Spacer(1, 6))
+
+            t_lr_data = [["Language Searching Rate", "Count of Language", "Share (%)"]]
+            for _, r in lang_rate_df.iterrows():
+                t_lr_data.append([str(r["Language Searching Rate"]), f"{int(r['Count of Language']):,}", f"{r['%']:.2f}%"])
+            tbl_lr = Table(t_lr_data, colWidths=[180, 140, 120], repeatRows=1)
+            style_pdf_table(tbl_lr, header_bg="#0F766E", font_size=7.5)
+            story.append(tbl_lr)
+            story.append(PageBreak())
+
+            # --- PAGE 3: SECTION 4 - TREND PER TEAM (CHART + TABLE) ---
+            story.append(Paragraph("Section 4: Weekly Searching Accuracy Trend Per Team (Chart & Table)", sec_style))
+            wk_cols_t = [c for c in trend_team_df.columns if c not in ["Team", "Trend"]]
+            if len(wk_cols_t) > 0:
+                fig3, ax3 = plt.subplots(figsize=(11.0, 3.2))
+                for _, r in trend_team_df.iterrows():
+                    team_name = str(r["Team"])
+                    y_vals = [float(r[c])*100.0 if pd.notna(r[c]) and str(r[c]).strip() != "" else None for c in wk_cols_t]
+                    ax3.plot(range(len(wk_cols_t)), y_vals, marker="o", linewidth=1.8, markersize=4.5, label=team_name)
+                ax3.axhline(90, color="#0f172a", linestyle="--", linewidth=1.0, label="90% Target")
+                ax3.set_xticks(range(len(wk_cols_t)))
+                ax3.set_xticklabels(wk_cols_t, rotation=20, ha="right", fontsize=8)
+                ax3.set_ylim(60, 105)
+                ax3.set_ylabel("Top 3 Clicks Accuracy (%)")
+                ax3.set_title("Weekly Searching Accuracy Trend Per Team (%)", fontsize=10.5, fontweight="bold")
+                ax3.legend(fontsize=7.2, loc="lower left", ncol=4)
+                ax3.grid(True, linestyle="--", alpha=0.4)
+                story.append(fig_to_rl_image(fig3, width_pt=770, height_pt=225))
+                story.append(Spacer(1, 8))
+
+            t_tt_headers = ["Team"] + wk_cols_t
+            t_tt_data = [t_tt_headers]
+            for _, r in trend_team_df.iterrows():
+                row_vals = [str(r["Team"])]
+                for c in wk_cols_t:
+                    val = r[c]
+                    if pd.notna(val) and str(val).strip() != "":
+                        num_v = float(val)
+                        row_vals.append(f"{num_v*100:.1f}%" if num_v <= 1.0 else f"{num_v:.1f}%")
+                    else:
+                        row_vals.append("-")
+                t_tt_data.append(row_vals)
+            col_w_tt = [105] + [int(660 / max(1, len(wk_cols_t)))] * len(wk_cols_t)
+            tbl_tt = Table(t_tt_data, colWidths=col_w_tt, repeatRows=1)
+            style_pdf_table(tbl_tt, font_size=6.8)
+            story.append(tbl_tt)
+            story.append(PageBreak())
+
+            # --- PAGE 4: SECTION 5 (TREND PER LANGUAGE) & SECTION 6 (LANGUAGES DATA MATRIX) ---
+            story.append(Paragraph("Section 5 & 6: Trend Per Language Searching & Languages Click Position Matrix", sec_style))
+            wk_cols_l = [c for c in trend_lang_df.columns if c != "Row Labels"]
+            if len(wk_cols_l) > 0:
+                fig4, (ax4_l, ax4_r) = plt.subplots(1, 2, figsize=(11.0, 2.7), gridspec_kw={"width_ratios": [1.5, 1.5]})
+                for idx_l, r in trend_lang_df.iterrows():
+                    lbl = str(r["Row Labels"]).strip()
+                    y_vals = [float(r[c])*100.0 if pd.notna(r[c]) and str(r[c]).strip() != "" else 0.0 for c in wk_cols_l]
+                    color_line = "#2563eb" if "eng" in lbl.lower() else "#10b981"
+                    ax4_l.plot(range(len(wk_cols_l)), y_vals, marker="s", linewidth=2.0, color=color_line, label=lbl)
+                ax4_l.set_xticks(range(len(wk_cols_l)))
+                ax4_l.set_xticklabels(wk_cols_l, rotation=22, ha="right", fontsize=7.5)
+                ax4_l.set_ylabel("Share (%)")
+                ax4_l.set_title("Weekly Trend Per Language Searching (%)", fontsize=9.5, fontweight="bold")
+                ax4_l.legend(fontsize=8)
+                ax4_l.grid(True, linestyle="--", alpha=0.4)
+
+                # Right chart: Click Position Distribution from Languages Data
+                pos_order_plot = ["0", "1", "2", "3", "4", "5", "No Click"]
+                pos_counts = [int((raw_df["Position_Clean"] == p).sum()) for p in pos_order_plot]
+                bars_p = ax4_r.bar(pos_order_plot, pos_counts, color=["#10b981", "#34d399", "#6ee7b7", "#60a5fa", "#93c5fd", "#bfdbfe", "#ef4444"])
+                ax4_r.set_title("Overall Click Position Distribution (Positions 0-5 vs. No Click)", fontsize=9.5, fontweight="bold")
+                ax4_r.set_ylabel("Search Count")
+                ax4_r.grid(axis="y", linestyle="--", alpha=0.4)
+                for b in bars_p:
+                    h = b.get_height()
+                    ax4_r.annotate(f"{h:,}", xy=(b.get_x() + b.get_width()/2, h), xytext=(0, 2), textcoords="offset points", ha="center", va="bottom", fontsize=7, fontweight="bold")
+
+                story.append(fig_to_rl_image(fig4, width_pt=770, height_pt=185))
+                story.append(Spacer(1, 6))
+
+                # Trend Per Language Table
+                t_tl_headers = ["Language"] + wk_cols_l
+                t_tl_data = [t_tl_headers]
+                for _, r in trend_lang_df.iterrows():
+                    rv = [str(r["Row Labels"]).strip()]
+                    for c in wk_cols_l:
+                        v = r[c]
+                        if pd.notna(v) and str(v).strip() != "":
+                            nv = float(v)
+                            rv.append(f"{nv*100:.2f}%" if nv <= 1.0 else f"{nv:.2f}%")
+                        else:
+                            rv.append("-")
+                    t_tl_data.append(rv)
+                col_w_tl = [95] + [int(670 / max(1, len(wk_cols_l)))] * len(wk_cols_l)
+                tbl_tl = Table(t_tl_data, colWidths=col_w_tl, repeatRows=1)
+                style_pdf_table(tbl_tl, header_bg="#0F766E", font_size=6.8)
+                story.append(tbl_tl)
+                story.append(Spacer(1, 8))
+
+            # Languages Data Matrix Table
+            if len(lang_lob_pivot) > 0:
+                ld_cols = list(lang_lob_pivot.columns)
+                t_ld_data = [ld_cols]
+                for _, r in lang_lob_pivot.iterrows():
+                    t_ld_data.append([str(r[c]) if pd.notna(r[c]) else "0" for c in ld_cols])
+                w_first = 115
+                w_rest = int(655 / max(1, len(ld_cols) - 1))
+                tbl_ld = Table(t_ld_data, colWidths=[w_first] + [w_rest]*(len(ld_cols)-1), repeatRows=1)
+                style_pdf_table(tbl_ld, font_size=6.5)
+                story.append(tbl_ld)
+            story.append(PageBreak())
+
+            # --- PAGE 5: SECTION 7 - PER AGENT (CHART + TABLE) ---
+            story.append(Paragraph("Section 7: Searching Accuracy Per Agent (Chart & Complete Table)", sec_style))
+            ag_plot_df = per_agent_df.dropna(subset=["English Top 3 Clicks %"]).head(25)
+            if len(ag_plot_df) > 0:
+                fig5, ax5 = plt.subplots(figsize=(11.0, 2.7))
+                x_ag = range(len(ag_plot_df))
+                ax5.bar([i - 0.18 for i in x_ag], ag_plot_df["English Top 3 Clicks %"], width=0.35, label="English Top 3 Clicks %", color="#10b981")
+                ax5.bar([i + 0.18 for i in x_ag], ag_plot_df["English TOP 10 Clicks %"], width=0.35, label="English Top 10 Clicks %", color="#2563eb")
+                ax5.axhline(90, color="#0f172a", linestyle="--", linewidth=0.9, label="90% Target")
+                ax5.set_xticks(list(x_ag))
+                ax5.set_xticklabels([str(n)[:16] for n in ag_plot_df["Name"]], rotation=28, ha="right", fontsize=7.2)
+                ax5.set_ylim(0, 112)
+                ax5.set_ylabel("Accuracy (%)")
+                ax5.set_title("Top 25 Agents Searching Accuracy (English Top 3 % & Top 10 %)", fontsize=9.5, fontweight="bold")
+                ax5.legend(fontsize=7.5, loc="lower right")
+                ax5.grid(axis="y", linestyle="--", alpha=0.4)
+                story.append(fig_to_rl_image(fig5, width_pt=770, height_pt=180))
+                story.append(Spacer(1, 6))
+
             t_ag_data = [[
                 "W3 Account", "Agent Name", "LOB", "Ar Total", "Ar Top 3 %", "Ar Ach.",
-                "En Total", "En Top 3", "En Top 10", "En NoClick", "En Top 3 %", "En Top 10 %", "En Ach."
+                "En Total", "En Top 3", "En Top 10", "En NoClick", "En Top 3 %", "En Top 10 %", "En NoClick %", "En Ach."
             ]]
             for _, r in per_agent_df.iterrows():
                 t_ag_data.append([
@@ -681,19 +926,12 @@ def render_report(agents_df, hc_df):
                     str(int(r["English No Click"])) if pd.notna(r["English No Click"]) else "-",
                     f"{r['English Top 3 Clicks %']:.1f}%" if pd.notna(r["English Top 3 Clicks %"]) else "-",
                     f"{r['English TOP 10 Clicks %']:.1f}%" if pd.notna(r["English TOP 10 Clicks %"]) else "-",
+                    f"{r['English No Click %']:.1f}%" if pd.notna(r["English No Click %"]) else "-",
                     str(r["English TOP 3 Clicks Achievement Status"]) if pd.notna(r["English TOP 3 Clicks Achievement Status"]) else "-"
                 ])
 
-            tbl_ag = Table(t_ag_data, colWidths=[68, 120, 95, 42, 52, 38, 48, 48, 50, 48, 52, 55, 42], repeatRows=1)
-            tbl_ag.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("ALIGN", (3, 0), (-1, -1), "CENTER"),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-                ("FONTSIZE", (0, 0), (-1, -1), 7),
-            ]))
+            tbl_ag = Table(t_ag_data, colWidths=[64, 115, 90, 38, 46, 35, 44, 44, 46, 46, 48, 50, 50, 38], repeatRows=1)
+            style_pdf_table(tbl_ag, font_size=6.8)
             story.append(tbl_ag)
 
             doc.build(story)
@@ -703,7 +941,7 @@ def render_report(agents_df, hc_df):
         dl_c1, dl_c2 = st.columns(2)
         with dl_c1:
             st.download_button(
-                label="📄 Download Searching Accuracy Executive PDF Report (Charts + Per Team & Per Agent)",
+                label="📄 Download Complete Searching Accuracy PDF Report (Every Section Paired with Its Chart - Ready for Email)",
                 data=generate_searching_pdf_bytes(),
                 file_name="Searching_Accuracy_Executive_Report.pdf",
                 mime="application/pdf",
@@ -711,9 +949,8 @@ def render_report(agents_df, hc_df):
                 use_container_width=True
             )
         with dl_c2:
+            # Export Excel without 'Arabic Agents Data' and 'English Agents Data' as requested
             excel_Bytes = export_multi_sheet_searching_excel({
-                "Arabic Agents Data": ar_agents_pivot,
-                "English Agents Data": en_agents_pivot,
                 "Languages Data": lang_lob_pivot,
                 "Per Agent": per_agent_df,
                 "Per Team": per_team_df,
@@ -724,7 +961,7 @@ def render_report(agents_df, hc_df):
                 "Total RawData": clean_raw_out
             })
             st.download_button(
-                label="📥 Download Complete 10-Sheet Searching Accuracy Workbook (.xlsx)",
+                label="📥 Download Complete 8-Sheet Searching Accuracy Workbook (.xlsx)",
                 data=excel_Bytes,
                 file_name="Searching_Accuracy_Report_Automated.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
